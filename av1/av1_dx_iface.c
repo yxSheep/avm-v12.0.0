@@ -66,6 +66,9 @@ struct aom_codec_alg_priv {
   int need_resync;  // wait for key/intra-only frame
   // BufferPool that holds all reference frames. Shared by all the FrameWorkers.
   BufferPool *buffer_pool;
+#if CONFIG_MSCNN
+  BufferPool *buffer_pool_residue;
+#endif
 
   // External frame buffer info to save for AV1 common.
   void *ext_priv;  // Private data associated with the external frame buffers.
@@ -156,8 +159,15 @@ static aom_codec_err_t decoder_destroy(aom_codec_alg_priv_t *ctx) {
 #if CONFIG_MULTITHREAD
     pthread_mutex_destroy(&ctx->buffer_pool->pool_mutex);
 #endif
+#if CONFIG_MSCNN
+    pthread_mutex_destroy(&ctx->buffer_pool_residue->pool_mutex);
+#endif
   }
 
+#if CONFIG_MSCNN
+  if (ctx->buffer_pool_residue)
+    av1_free_residue_frame_buffers(ctx->buffer_pool_residue);
+#endif
   if (ctx->buffer_pool) {
     for (size_t i = 0; i < ctx->num_grain_image_frame_buffers; i++) {
       ctx->buffer_pool->release_fb_cb(ctx->buffer_pool->cb_priv,
@@ -169,6 +179,9 @@ static aom_codec_err_t decoder_destroy(aom_codec_alg_priv_t *ctx) {
 
   aom_free(ctx->frame_worker);
   aom_free(ctx->buffer_pool);
+#if CONFIG_MSCNN
+  aom_free(ctx->buffer_pool_residue);
+#endif
   aom_img_free(&ctx->img);
   aom_img_free(&ctx->image_with_grain);
   aom_free(ctx);
@@ -645,6 +658,24 @@ static void init_buffer_callbacks(aom_codec_alg_priv_t *ctx) {
 
     pool->cb_priv = &pool->int_frame_buffers;
   }
+
+#if CONFIG_MSCNN
+  BufferPool *const pool_residue = cm->buffer_pool_residue;
+  if (ctx->get_ext_fb_cb != NULL && ctx->release_ext_fb_cb != NULL) {
+    pool_residue->get_fb_cb = ctx->get_ext_fb_cb;
+    pool_residue->release_fb_cb = ctx->release_ext_fb_cb;
+    pool_residue->cb_priv = ctx->ext_priv;
+  } else {
+    pool_residue->get_fb_cb = av1_get_frame_buffer;
+    pool_residue->release_fb_cb = av1_release_frame_buffer;
+
+    if (av1_alloc_internal_frame_buffers_residue(&pool_residue->int_frame_buffers))
+      aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                         "Failed to initialize internal frame buffers");
+
+    pool_residue->cb_priv = &pool_residue->int_frame_buffers;
+  }
+#endif
 }
 
 static int frame_worker_hook(void *arg1, void *arg2) {
@@ -680,6 +711,17 @@ static aom_codec_err_t init_decoder(aom_codec_alg_priv_t *ctx) {
   }
 #endif
 
+#if CONFIG_MSCNN
+  ctx->buffer_pool_residue = (BufferPool *)aom_calloc(1, sizeof(BufferPool));
+  if (ctx->buffer_pool_residue == NULL) return AOM_CODEC_MEM_ERROR;
+#if CONFIG_MULTITHREAD
+  if (pthread_mutex_init(&ctx->buffer_pool_residue->pool_mutex, NULL)) {
+    set_error_detail(ctx, "Failed to allocate buffer pool mutex");
+    return AOM_CODEC_MEM_ERROR;
+  }
+#endif
+#endif
+
   ctx->frame_worker = (AVxWorker *)aom_malloc(sizeof(*ctx->frame_worker));
   if (ctx->frame_worker == NULL) {
     set_error_detail(ctx, "Failed to allocate frame_worker");
@@ -696,11 +738,21 @@ static aom_codec_err_t init_decoder(aom_codec_alg_priv_t *ctx) {
     return AOM_CODEC_MEM_ERROR;
   }
   frame_worker_data = (FrameWorkerData *)worker->data1;
+
+#if CONFIG_MSCNN
+#if CONFIG_PARAKIT_COLLECT_DATA
+  frame_worker_data->pbi = av1_decoder_create(
+      ctx->buffer_pool, ctx->buffer_pool_residue, ctx->cfg.path_parakit, ctx->cfg.suffix_parakit);
+#else
+  frame_worker_data->pbi = av1_decoder_create(ctx->buffer_pool, ctx->buffer_pool_residue);
+#endif
+#else
 #if CONFIG_PARAKIT_COLLECT_DATA
   frame_worker_data->pbi = av1_decoder_create(
       ctx->buffer_pool, ctx->cfg.path_parakit, ctx->cfg.suffix_parakit);
 #else
   frame_worker_data->pbi = av1_decoder_create(ctx->buffer_pool);
+#endif
 #endif
 
   if (frame_worker_data->pbi == NULL) {

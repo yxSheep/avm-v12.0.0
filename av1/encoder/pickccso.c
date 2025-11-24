@@ -1797,9 +1797,14 @@ void ccso_search(AV1_COMMON *cm, MACROBLOCKD *xd, int rdmult,
     return;
   }
   const int num_planes = av1_num_planes(cm);
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 
+                       &cm->cur_frame_residue->buf, 0, 0, 0, num_planes,
+                       NULL);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 0, 0, 0, num_planes,
                        NULL);
-
+#endif
   CcsoCtx *const ctx = aom_calloc(1, sizeof(CcsoCtx));
   ctx->ccso_stride = xd->plane[0].dst.width;
   ctx->ccso_stride_ext = xd->plane[0].dst.width + (CCSO_PADDING_SIZE << 1);

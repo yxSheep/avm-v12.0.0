@@ -915,8 +915,13 @@ static AOM_INLINE void bridge_frame_set_offsets(
       xd, tile, mi_row, bh, mi_col, bw, mi_params->mi_rows, mi_params->mi_cols,
       chroma_ref_info);
 
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+                       num_planes, chroma_ref_info);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,
                        num_planes, chroma_ref_info);
+#endif
 
   xd->mi[0]->partition = partition;
   // set region_type for each mbmi

@@ -301,6 +301,9 @@ endif()
 
 if(NOT WIN32 AND NOT APPLE)
   target_link_libraries(aom ${AOM_LIB_LINK_TYPE} m)
+  if(CONFIG_MSCNN)  
+    target_link_libraries(aom ${AOM_LIB_LINK_TYPE} torch)
+  endif()  
   if(BUILD_SHARED_LIBS)
     target_link_libraries(aom_static ${AOM_LIB_LINK_TYPE} m)
   endif()
@@ -1199,3 +1202,9 @@ endforeach()
 
 # Generate aom.pc and setup install rule.
 setup_aom_install_targets()
+
+# CONFIG_MSCNN
+# Copy the nn_loopfilter directory to the build directory
+if(CONFIG_MSCNN)
+  find_package(Torch REQUIRED)
+endif()

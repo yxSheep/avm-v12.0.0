@@ -104,6 +104,9 @@ typedef struct {
 
 typedef struct LoopFilterWorkerData {
   YV12_BUFFER_CONFIG *frame_buffer;
+#if CONFIG_MSCNN
+  YV12_BUFFER_CONFIG *residue_buffer;
+#endif
   struct AV1Common *cm;
   struct macroblockd_plane planes[MAX_MB_PLANE];
   // TODO(Ranjit): When the filter functions are modified to use xd->lossless
@@ -127,9 +130,16 @@ void av1_loop_filter_frame_init(struct AV1Common *cm, int plane_start,
  * \ingroup in_loop_filter
  * \callgraph
  */
+#if CONFIG_MSCNN
+void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, 
+                           YV12_BUFFER_CONFIG *residue, struct AV1Common *cm,
+                           struct macroblockd *xd, int plane_start,
+                           int plane_end, int partial_frame);
+#else
 void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, struct AV1Common *cm,
                            struct macroblockd *xd, int plane_start,
                            int plane_end, int partial_frame);
+#endif
 void loop_filter_tip_plane(struct AV1Common *cm, const int plane, uint16_t *dst,
                            const int dst_stride, const int plane_w,
                            const int plane_h);

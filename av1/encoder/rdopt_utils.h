@@ -38,7 +38,15 @@ static AOM_INLINE void restore_dst_buf(MACROBLOCKD *xd, const BUFFER_SET dst,
     xd->plane[i].dst.stride = dst.stride[i];
   }
 }
-
+#if CONFIG_MSCNN
+static AOM_INLINE void restore_dstResidue_buf(MACROBLOCKD *xd, const BUFFER_SET dstResidue,
+                                       const int num_planes) {
+  for (int i = 0; i < num_planes; i++) {
+    xd->plane[i].dstResidue.buf = dstResidue.plane[i];
+    xd->plane[i].dstResidue.stride = dstResidue.stride[i];
+  }
+}
+#endif
 /* clang-format on */
 // Calculate rd threshold based on ref best rd and relevant scaling factors
 static AOM_INLINE int64_t get_rd_thresh_from_best_rd(int64_t ref_best_rd,

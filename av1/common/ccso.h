@@ -50,8 +50,13 @@ void cal_filter_support(int *rec_luma_idx, const uint16_t *rec_y,
 void derive_ccso_sample_pos(int *rec_idx, const int ccso_stride,
                             const uint8_t ext_filter_support);
 
+#if CONFIG_MSCNN
+void ccso_frame(YV12_BUFFER_CONFIG *frame, YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm, MACROBLOCKD *xd,
+                uint16_t *ext_rec_y);
+#else
 void ccso_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm, MACROBLOCKD *xd,
                 uint16_t *ext_rec_y);
+#endif
 
 // Apply CCSO for each process block row
 void av1_apply_ccso_filter_for_row(AV1_COMMON *cm, MACROBLOCKD *xd,

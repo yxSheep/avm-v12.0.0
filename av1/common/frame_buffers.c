@@ -34,6 +34,26 @@ int av1_alloc_internal_frame_buffers(InternalFrameBufferList *list) {
   return 0;
 }
 
+#if CONFIG_MSCNN
+int av1_alloc_internal_frame_buffers_residue(InternalFrameBufferList *list) {
+  assert(list != NULL);
+  av1_free_internal_frame_buffers(list);
+
+  // When all reference frames at frame buffers are output at the same time
+  // and these frames use film grain synthesis, the total number of required
+  // frame buffers is (total references numbers + current frame) * 2 + working
+  // buffers for multh-threads
+  list->num_internal_frame_buffers = 2; // TODOCNN 这里应该赋值多少
+  list->int_fb = (InternalFrameBuffer *)aom_calloc(
+      list->num_internal_frame_buffers, sizeof(*list->int_fb));
+  if (list->int_fb == NULL) {
+    list->num_internal_frame_buffers = 0;
+    return 1;
+  }
+  return 0;
+}
+#endif
+
 void av1_free_internal_frame_buffers(InternalFrameBufferList *list) {
   int i;
 

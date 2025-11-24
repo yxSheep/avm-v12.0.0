@@ -41,6 +41,10 @@ void av1_free_context_buffers(struct AV1Common *cm);
 
 void av1_free_ref_frame_buffers(struct BufferPool *pool);
 
+#if CONFIG_MSCNN
+void av1_free_residue_frame_buffers(struct BufferPool *pool_residue);
+#endif
+
 // Allocates the line buffers of CDEF for all planes and reallocates the buffer
 // if frame size, subsampling, flags, or plane count changed.
 void av1_alloc_cdef_buffers(struct AV1Common *const cm,

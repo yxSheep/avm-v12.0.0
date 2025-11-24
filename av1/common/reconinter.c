@@ -3916,6 +3916,29 @@ void av1_build_inter_predictors(const AV1_COMMON *cm, MACROBLOCKD *xd,
   }
 }
 
+#if CONFIG_MSCNN
+void av1_setup_dst_planes(struct macroblockd_plane *planes,
+                          const YV12_BUFFER_CONFIG *src,
+                          const YV12_BUFFER_CONFIG *residue, int mi_row,
+                          int mi_col, const int plane_start,
+                          const int plane_end,
+                          const CHROMA_REF_INFO *chroma_ref_info) {
+  // We use AOMMIN(num_planes, MAX_MB_PLANE)
+  // instead of num_planes to quiet the static
+  // analysis warnings.
+  for (int i = plane_start; i < AOMMIN(plane_end, MAX_MB_PLANE); ++i) {
+    struct macroblockd_plane *const pd = &planes[i];
+    const int is_uv = i > 0;
+    setup_dst_planes(
+        &pd->dst, src->buffers[i], src->widths[is_uv], src->heights[is_uv],
+        src->crop_widths[is_uv], src->crop_heights[is_uv], src->strides[is_uv],
+        &pd->dstResidue, residue->buffers[i], residue->widths[is_uv],
+        residue->heights[is_uv], residue->crop_widths[is_uv],
+        residue->crop_heights[is_uv], residue->strides[is_uv], mi_row, mi_col,
+        NULL, pd->subsampling_x, pd->subsampling_y, chroma_ref_info);
+  }
+}
+#else
 void av1_setup_dst_planes(struct macroblockd_plane *planes,
                           const YV12_BUFFER_CONFIG *src, int mi_row, int mi_col,
                           const int plane_start, const int plane_end,
@@ -3933,6 +3956,7 @@ void av1_setup_dst_planes(struct macroblockd_plane *planes,
                      chroma_ref_info);
   }
 }
+#endif
 
 void av1_setup_pre_planes(MACROBLOCKD *xd, int idx,
                           const YV12_BUFFER_CONFIG *src, int mi_row, int mi_col,

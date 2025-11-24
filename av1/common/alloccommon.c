@@ -34,6 +34,13 @@ int av1_get_MBs(int width, int height) {
   return mb_rows * mb_cols;
 }
 
+#if CONFIG_MSCNN
+void av1_free_residue_frame_buffers(BufferPool *pool_residue) {
+  if (pool_residue->frame_bufs[0].ref_count > 0)
+    pool_residue->release_fb_cb(pool_residue->cb_priv, &pool_residue->frame_bufs[0].raw_frame_buffer);
+}
+#endif
+
 void av1_free_ref_frame_buffers(BufferPool *pool) {
   int i;
 

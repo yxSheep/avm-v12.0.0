@@ -414,6 +414,16 @@ static AOM_INLINE void reset_frame_mi_cdef_strength(AV1_COMMON *cm) {
   }
 }
 
+#if CONFIG_MSCNN
+void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
+                     const YV12_BUFFER_CONFIG *residue,
+                     const YV12_BUFFER_CONFIG *ref, AV1_COMMON *cm,
+                     MACROBLOCKD *xd,
+#if CONFIG_ENTROPY_STATS
+                     ThreadData *td,
+#endif  // CONFIG_ENTROPY_STATS
+                     CDEF_PICK_METHOD pick_method, int rdmult) {
+#else
 void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
                      const YV12_BUFFER_CONFIG *ref, AV1_COMMON *cm,
                      MACROBLOCKD *xd,
@@ -421,6 +431,7 @@ void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
                      ThreadData *td,
 #endif  // CONFIG_ENTROPY_STATS
                      CDEF_PICK_METHOD pick_method, int rdmult) {
+#endif
   if (cm->seq_params.enable_cdef_on_skip_txfm == CDEF_ON_SKIP_TXFM_DISABLED) {
     cm->cdef_info.cdef_on_skip_txfm_frame_enable = 0;
   } else {
@@ -460,7 +471,11 @@ void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
   const int total_strengths = nb_cdef_strengths[pick_method];
   DECLARE_ALIGNED(32, uint16_t, tmp_dst[1 << (MAX_SB_SIZE_LOG2 * 2)]);
   const int num_planes = av1_num_planes(cm);
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, frame, residue, 0, 0, 0, num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, frame, 0, 0, 0, num_planes, NULL);
+#endif
   uint64_t(*mse[2])[TOTAL_STRENGTHS];
   mse[0] = aom_malloc(sizeof(**mse) * nvfb * nhfb);
   mse[1] = aom_malloc(sizeof(**mse) * nvfb * nhfb);

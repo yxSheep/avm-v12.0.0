@@ -75,6 +75,13 @@
 #include "av1/decoder/decodetxb.h"
 #include "av1/decoder/detokenize.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/nn_loopfilter.h"
+
+// Create a temporary frame for the loop filter
+static YV12_BUFFER_CONFIG nn_dblk_input;
+#endif
+
 #define AOM_MIN_THREADS_PER_TILE 1
 #define AOM_MAX_THREADS_PER_TILE 2
 
@@ -193,12 +200,19 @@ static REFERENCE_MODE read_frame_reference_mode(
   }
 }
 
+#if CONFIG_MSCNN
+static AOM_INLINE void inverse_transform_block(
+    DecoderCodingBlock *dcb, const AV1_COMMON *cm, int plane,
+    const TX_TYPE tx_type, const TX_SIZE tx_size, uint16_t *dst, int stride,
+    uint16_t *dstResidue, int strideResidue, int reduced_tx_set) {
+#else
 static AOM_INLINE void inverse_transform_block(DecoderCodingBlock *dcb,
                                                const AV1_COMMON *cm, int plane,
                                                const TX_TYPE tx_type,
                                                const TX_SIZE tx_size,
                                                uint16_t *dst, int stride,
                                                int reduced_tx_set) {
+#endif
   tran_low_t *dqcoeff = dcb->dqcoeff_block[plane] + dcb->cb_offset[plane];
   eob_info *eob_data = dcb->eob_data[plane] + dcb->txb_offset[plane];
   uint16_t scan_line = eob_data->max_scan_line;
@@ -212,11 +226,21 @@ static AOM_INLINE void inverse_transform_block(DecoderCodingBlock *dcb,
     scan_line = AOMMAX(eob_data_c1->max_scan_line, eob_data_c2->max_scan_line);
     eob = AOMMAX(eob_data_c1->eob, eob_data_c2->eob);
   }
+#if CONFIG_MSCNN
+  av1_inverse_transform_block(
+      &dcb->xd, dqcoeff, plane, tx_type, tx_size, dst, stride, dstResidue,
+      strideResidue, eob,
+      replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                          cm->features.allow_screen_content_tools, &dcb->xd),
+      reduced_tx_set);
+#else
   av1_inverse_transform_block(
       &dcb->xd, dqcoeff, plane, tx_type, tx_size, dst, stride, eob,
       replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
                           cm->features.allow_screen_content_tools, &dcb->xd),
       reduced_tx_set);
+#endif
+
   const int width = tx_size_wide[tx_size] <= 32 ? tx_size_wide[tx_size] : 32;
   const int height = tx_size_high[tx_size] <= 32 ? tx_size_high[tx_size] : 32;
   const int sbSize = (width >= 8 && height >= 8) ? 8 : 4;
@@ -286,6 +310,11 @@ static AOM_INLINE void predict_and_reconstruct_intra_block(
   PLANE_TYPE plane_type = get_plane_type(plane);
 
   av1_predict_intra_block_facade(cm, xd, plane, col, row, tx_size);
+
+#if CONFIG_MSCNN
+  bool zeroResidue = true;
+#endif
+
 #if CONFIG_INSPECTION
   {
     const int txwpx = tx_size_wide[tx_size];
@@ -369,10 +398,38 @@ static AOM_INLINE void predict_and_reconstruct_intra_block(
       struct macroblockd_plane *const pd = &xd->plane[plane];
       uint16_t *dst =
           &pd->dst.buf[(row * pd->dst.stride + col) << MI_SIZE_LOG2];
+#if CONFIG_MSCNN
+      zeroResidue = false;
+      uint16_t *dstResidue =
+          &pd->dstResidue
+               .buf[(row * pd->dstResidue.stride + col) << MI_SIZE_LOG2];
+      inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst,
+                              pd->dst.stride, dstResidue, pd->dstResidue.stride,
+                              reduced_tx_set_used);
+#else
       inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst,
                               pd->dst.stride, reduced_tx_set_used);
+#endif
     }
   }
+
+#if CONFIG_MSCNN
+  if (zeroResidue) {
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
+    struct macroblockd_plane *const pd = &xd->plane[plane];
+    int dstResidue_stride = pd->dstResidue.stride;
+    uint16_t *dstResidue =
+        &pd->dstResidue.buf[(row * dstResidue_stride + col) << MI_SIZE_LOG2];
+    int32_t *residuePtr = (int32_t *)dstResidue;
+    for (int r0 = 0; r0 < h; ++r0) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr[r0 * dstResidue_stride + c] = 0;
+      }
+    }
+  }
+#endif
 
 #if CONFIG_MISMATCH_DEBUG
   {
@@ -435,8 +492,18 @@ static AOM_INLINE void inverse_transform_inter_block(
 
   uint16_t *dst =
       &pd->dst.buf[(blk_row * pd->dst.stride + blk_col) << MI_SIZE_LOG2];
+#if CONFIG_MSCNN
+  uint16_t *dstResidue =
+      &pd->dstResidue
+           .buf[(blk_row * pd->dstResidue.stride + blk_col) << MI_SIZE_LOG2];
+  inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst, pd->dst.stride,
+                          dstResidue, pd->dstResidue.stride,
+                          reduced_tx_set_used);
+#else
   inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst, pd->dst.stride,
                           reduced_tx_set_used);
+#endif
+
 #if CONFIG_MISMATCH_DEBUG
   int pixel_c, pixel_r;
   BLOCK_SIZE bsize = txsize_to_bsize[tx_size];
@@ -584,9 +651,14 @@ static AOM_INLINE void set_offsets(AV1_COMMON *const cm, MACROBLOCKD *const xd,
       chroma_ref_info);
   xd->mi[0]->chroma_mi_row_start = mi_row;
   xd->mi[0]->chroma_mi_col_start = mi_col;
-
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
+                       &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+                       num_planes, chroma_ref_info);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,
                        num_planes, chroma_ref_info);
+#endif
 }
 
 static INLINE void extend_mc_border(const struct scale_factors *const sf,
@@ -1257,8 +1329,10 @@ static AOM_INLINE void decode_token_recon_block(AV1Decoder *const pbi,
                               xd->tree_type, &mbmi->chroma_ref_info,
                               plane_start, plane_end);
     td->predict_inter_block_visit(cm, dcb, bsize);
+    int FLAGCNN = true; // TODOCNN zero residue?
     // Reconstruction
     if (!mbmi->skip_txfm[xd->tree_type == CHROMA_PART]) {
+      FLAGCNN = false;
       int eobtotal = 0;
       if (!bru_is_sb_active(cm, xd->mi_col, xd->mi_row)) {
         aom_internal_error(
@@ -1392,6 +1466,66 @@ static AOM_INLINE void decode_token_recon_block(AV1Decoder *const pbi,
                               xd->tree_type, &mbmi->chroma_ref_info,
                               plane_start, plane_end);
     }
+#if CONFIG_MSCNN
+    if (FLAGCNN) { // zero residue
+      const int max_blocks_wide = max_block_wide(xd, bsize, 0);
+      const int max_blocks_high = max_block_high(xd, bsize, 0);
+      int row, col;
+
+      const BLOCK_SIZE max_unit_bsize = BLOCK_64X64;
+      assert(max_unit_bsize ==
+             get_plane_block_size(BLOCK_64X64, xd->plane[0].subsampling_x,
+                                  xd->plane[0].subsampling_y));
+      int mu_blocks_wide = mi_size_wide[max_unit_bsize];
+      int mu_blocks_high = mi_size_high[max_unit_bsize];
+
+      mu_blocks_wide = AOMMIN(max_blocks_wide, mu_blocks_wide);
+      mu_blocks_high = AOMMIN(max_blocks_high, mu_blocks_high);
+
+      for (row = 0; row < max_blocks_high; row += mu_blocks_high) {
+        for (col = 0; col < max_blocks_wide; col += mu_blocks_wide) {
+          for (int plane = plane_start; plane < plane_end; ++plane) {
+            if (plane && !xd->is_chroma_ref) break;
+            const struct macroblockd_plane *const pd = &xd->plane[plane];
+            const int ss_x = pd->subsampling_x;
+            const int ss_y = pd->subsampling_y;
+            const BLOCK_SIZE plane_bsize =
+                get_plane_block_size(bsize, ss_x, ss_y);
+            const TX_SIZE max_tx_size =
+                get_vartx_max_txsize(xd, plane_bsize, plane);
+            const int bh_var_tx = tx_size_high_unit[max_tx_size];
+            const int bw_var_tx = tx_size_wide_unit[max_tx_size];
+            int blk_row, blk_col;
+            const int unit_height = ROUND_POWER_OF_TWO(
+                AOMMIN(mu_blocks_high + row, max_blocks_high), ss_y);
+            const int unit_width = ROUND_POWER_OF_TWO(
+                AOMMIN(mu_blocks_wide + col, max_blocks_wide), ss_x);
+
+            for (blk_row = row >> ss_y; blk_row < unit_height;
+                 blk_row += bh_var_tx) {
+              for (blk_col = col >> ss_x; blk_col < unit_width;
+                   blk_col += bw_var_tx) {
+                int w = tx_size_wide[max_tx_size];
+                int h = tx_size_high[max_tx_size];
+                int dstResidue_stride = pd->dstResidue.stride;
+                uint16_t *dstResidue =
+                    &pd->dstResidue.buf[(blk_row * dstResidue_stride + blk_col)
+                                        << MI_SIZE_LOG2];
+
+                int32_t *residuePtr = (int32_t *)dstResidue;
+                for (int r0 = 0; r0 < h; ++r0) {
+                  for (int c = 0; c < w; ++c) {
+                    //// residue
+                    residuePtr[r0 * dstResidue_stride + c] = 0;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+#endif
   }
 
   td->copy_frame_mvs_block_visit(cm, dcb, bsize);
@@ -1703,9 +1837,14 @@ static AOM_INLINE void set_offsets_for_pred_and_recon(AV1Decoder *const pbi,
 #endif  // CONFIG_CTX_MODELS_LINE_BUFFER_REDUCTION
       xd, tile, mi_row, bh, mi_col, bw, mi_params->mi_rows, mi_params->mi_cols,
       chroma_ref_info);
-
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
+                       &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+                       num_planes, chroma_ref_info);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,
                        num_planes, chroma_ref_info);
+#endif
 }
 
 static AOM_INLINE void decode_block(AV1Decoder *const pbi, ThreadData *const td,
@@ -3036,7 +3175,7 @@ static void read_wienerns_framefilters_hdr(AV1_COMMON *cm, int plane,
   }
   const WienernsFilterParameters *nsfilter_params =
       get_wienerns_parameters(base_qindex, is_uv);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
   WienerNonsepInfoBank bank = { 0 };
   bank.filter[0].num_classes = num_classes;
   for (int c_id = 0; c_id < num_classes; ++c_id) {
@@ -3139,7 +3278,7 @@ static void read_wienerns_framefilters(AV1_COMMON *cm, MACROBLOCKD *xd,
   }
   const WienernsFilterParameters *nsfilter_params =
       get_wienerns_parameters(base_qindex, is_uv);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
   WienerNonsepInfoBank bank = { 0 };
   bank.filter[0].num_classes = num_classes;
   for (int c_id = 0; c_id < num_classes; ++c_id) {
@@ -3235,7 +3374,7 @@ static void read_wienerns_filter(MACROBLOCKD *xd, int is_uv,
   }
   const WienernsFilterParameters *nsfilter_params =
       get_wienerns_parameters(xd->current_base_qindex, is_uv);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
   for (int c_id = 0; c_id < num_classes; ++c_id) {
     if (skip_filter_read_for_class[c_id]) {
       copy_nsfilter_taps_for_class(
@@ -3575,6 +3714,39 @@ static AOM_INLINE void setup_cdef(AV1_COMMON *cm,
     }
   }
 }
+
+#if CONFIG_MSCNN
+static AOM_INLINE void setup_nn_loopfilter(AV1_COMMON *cm,
+                                           struct aom_read_bit_buffer *rb) {
+  cm->nn_loopfilter_info.flag_count = 0;                        // default
+  cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable = 0;  // default
+  cm->nn_loopfilter_info.nn_loopfilter_enable = aom_rb_read_literal(rb, 1);
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
+    cm->nn_loopfilter_info.model_idx = aom_rb_read_literal(rb, MODEL_BITS);
+
+    int symbol = aom_rb_read_literal(rb, 1);
+    if (symbol == 1) {
+      cm->nn_loopfilter_info.rs_idx = 0;
+    } else {
+      symbol = aom_rb_read_literal(rb, 1);
+      cm->nn_loopfilter_info.rs_idx = (symbol == 1) ? 1 : 2;
+    }
+
+    cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable =
+        aom_rb_read_literal(rb, 1);
+    if (cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable) {
+      cm->nn_loopfilter_info.blk_size_idx = aom_rb_read_literal(rb, 2);
+      int selected_blk_size = blk_sizes[cm->nn_loopfilter_info.blk_size_idx];
+      cm->nn_loopfilter_info.stride =
+          ceil(cm->cur_frame->buf.y_width / (double)selected_blk_size);
+      int flag_count =
+          (int)(ceil(cm->cur_frame->buf.y_height / (double)selected_blk_size) *
+                cm->nn_loopfilter_info.stride);
+      cm->nn_loopfilter_info.flag_count = flag_count;
+    }
+  }
+}
+#endif
 
 // read offset idx using truncated unary coding
 static AOM_INLINE int read_ccso_offset_idx(struct aom_read_bit_buffer *rb) {
@@ -4189,6 +4361,35 @@ static AOM_INLINE void setup_buffer_pool(AV1_COMMON *cm) {
   if (cm->seq_params.enable_tip) {
     setup_tip_frame_size(cm);
   }
+#if CONFIG_MSCNN
+  BufferPool *const pool_residue =
+      cm->buffer_pool_residue;  // TODOCNN 逻辑是这样的吗
+      lock_buffer_pool(pool_residue);
+  if (aom_realloc_residue_frame_buffer(
+          &cm->cur_frame_residue->buf, cm->width, cm->height,
+          seq_params->subsampling_x, seq_params->subsampling_y,
+          AOM_DEC_BORDER_IN_PIXELS, cm->features.byte_alignment,
+          &cm->cur_frame_residue->raw_frame_buffer, pool_residue->get_fb_cb,
+          pool_residue->cb_priv, false)) {
+    unlock_buffer_pool(pool_residue);
+    aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                       "Failed to allocate frame buffer");
+  }
+  pool_residue->frame_bufs[0].ref_count = 1;
+  unlock_buffer_pool(pool_residue);
+  cm->cur_frame_residue->buf.bit_depth = (unsigned int)seq_params->bit_depth;
+  cm->cur_frame_residue->buf.color_primaries = seq_params->color_primaries;
+  cm->cur_frame_residue->buf.transfer_characteristics =
+      seq_params->transfer_characteristics;
+  cm->cur_frame_residue->buf.matrix_coefficients =
+      seq_params->matrix_coefficients;
+  cm->cur_frame_residue->buf.monochrome = seq_params->monochrome;
+  cm->cur_frame_residue->buf.chroma_sample_position =
+      seq_params->chroma_sample_position;
+  cm->cur_frame_residue->buf.color_range = seq_params->color_range;
+  cm->cur_frame_residue->buf.render_width = cm->render_width;
+  cm->cur_frame_residue->buf.render_height = cm->render_height;
+#endif
 }
 
 static AOM_INLINE void setup_frame_size(AV1_COMMON *cm,
@@ -4880,6 +5081,26 @@ static AOM_INLINE void decode_tile(AV1Decoder *pbi, ThreadData *const td,
   for (int p = 0; p < num_planes; ++p)
     num_filter_classes[p] = cm->rst_info[p].num_filter_classes;
   av1_reset_loop_restoration(xd, 0, num_planes, num_filter_classes);
+#if CONFIG_MSCNN
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable &&
+      cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable &&
+      tile_row == 0 && tile_col == 0) {
+    // TODO: Disable access across tile boundary
+    for (int i = 0; i < cm->nn_loopfilter_info.flag_count; i++) {
+      uint8_t top_ctx =
+          ((i - cm->nn_loopfilter_info.stride) < 0)
+              ? 0
+              : cm->nn_loopfilter_info
+                    .nn_loopfilter_flags[(i - cm->nn_loopfilter_info.stride)];
+      uint8_t left_ctx =
+          ((i % cm->nn_loopfilter_info.stride) == 0)
+              ? 0
+              : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - 1)];
+      cm->nn_loopfilter_info.nn_loopfilter_flags[i] = aom_read_symbol(
+          td->bit_reader, xd->tile_ctx->nn_cdf[left_ctx][top_ctx], 2, ACCT_STR);
+    }
+  }
+#endif
 #if CONFIG_CWG_F317
   if (cm->bru.enabled || cm->bridge_frame_info.is_bridge_frame) {
     if (cm->bru.frame_inactive_flag || cm->bridge_frame_info.is_bridge_frame)
@@ -5373,7 +5594,26 @@ static AOM_INLINE void parse_tile_row_mt(AV1Decoder *pbi, ThreadData *const td,
   for (int p = 0; p < num_planes; ++p)
     num_filter_classes[p] = cm->rst_info[p].num_filter_classes;
   av1_reset_loop_restoration(xd, 0, num_planes, num_filter_classes);
-
+#if CONFIG_MSCNN
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable &&
+      cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable &&
+      tile_info.tile_row == 0 && tile_info.tile_col == 0) {
+    // TODO: Disable access across tile boundary
+    for (int i = 0; i < cm->nn_loopfilter_info.flag_count; i++) {
+      uint8_t top_ctx =
+          ((i - cm->nn_loopfilter_info.stride) < 0)
+              ? 0
+              : cm->nn_loopfilter_info
+                    .nn_loopfilter_flags[(i - cm->nn_loopfilter_info.stride)];
+      uint8_t left_ctx =
+          ((i % cm->nn_loopfilter_info.stride) == 0)
+              ? 0
+              : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - 1)];
+      cm->nn_loopfilter_info.nn_loopfilter_flags[i] = aom_read_symbol(
+          td->bit_reader, xd->tile_ctx->nn_cdf[left_ctx][top_ctx], 2, ACCT_STR);
+    }
+  }
+#endif
   for (int mi_row = tile_info.mi_row_start; mi_row < tile_info.mi_row_end;
        mi_row += cm->mib_size) {
     av1_zero_left_context(xd);
@@ -6144,9 +6384,9 @@ void av1_read_film_grain_params(AV1_COMMON *cm,
 #if CONFIG_CWG_F298_REC11
 #define fgm_value_increment(i, j) (fgm_scaling_points[i][j][0])
 #define fgm_value_scale(i, j) (fgm_scaling_points[i][j][1])
-  int(*fgm_scaling_points[])[2] = { pars->fgm_scaling_points_0,
-                                    pars->fgm_scaling_points_1,
-                                    pars->fgm_scaling_points_2 };
+  int (*fgm_scaling_points[])[2] = { pars->fgm_scaling_points_0,
+                                     pars->fgm_scaling_points_1,
+                                     pars->fgm_scaling_points_2 };
 
   int fgmNumChannels = seq_params->monochrome ? 1 : 3;
 
@@ -7665,6 +7905,10 @@ static INLINE void reset_frame_buffers(AV1_COMMON *cm) {
   }
   av1_zero_unused_internal_frame_buffers(&cm->buffer_pool->int_frame_buffers);
   unlock_buffer_pool(cm->buffer_pool);
+#if CONFIG_MSCNN
+  av1_zero_unused_internal_frame_buffers(
+      &cm->buffer_pool_residue->int_frame_buffers);
+#endif
 }
 
 static INLINE int get_disp_order_hint(AV1_COMMON *const cm) {
@@ -8033,6 +8277,11 @@ static int read_uncompressed_header(AV1Decoder *pbi,
   BufferPool *const pool = cm->buffer_pool;
   RefCntBuffer *const frame_bufs = pool->frame_bufs;
 #endif  // CONFIG_F322_OBUER_ERM
+#if CONFIG_MSCNN
+  BufferPool *const pool_residue = cm->buffer_pool_residue;
+  RefCntBuffer *const frame_bufs_residue = pool_residue->frame_bufs;
+  (void)frame_bufs_residue; 
+#endif
   aom_s_frame_info *sframe_info = &pbi->sframe_info;
   sframe_info->is_s_frame = 0;
   sframe_info->is_s_frame_at_altref = 0;
@@ -8682,9 +8931,30 @@ static int read_uncompressed_header(AV1Decoder *pbi,
           buf->display_order_hint = get_ref_frame_disp_order_hint(cm, buf);
 #if CONFIG_RANDOM_ACCESS_SWITCH_FRAME
           buf->long_term_id = -1;
-#endif  // CONFIG_RANDOM_ACCESS_SWITCH_FRAME
+#endif            // CONFIG_RANDOM_ACCESS_SWITCH_FRAME
         }
       }
+#if CONFIG_MSCNN  // 这段代码是在这里吗
+      int buf_idx_residue = get_fb_residue(cm);
+      if (buf_idx_residue == INVALID_IDX) {
+        aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                           "Unable to find free residue frame buffer");
+      }
+      RefCntBuffer *buf_residue = &frame_bufs_residue[buf_idx_residue];
+      lock_buffer_pool(pool_residue);
+      if (aom_realloc_residue_frame_buffer(
+              &buf_residue->buf, seq_params->max_frame_width,
+              seq_params->max_frame_height, seq_params->subsampling_x,
+              seq_params->subsampling_y, AOM_BORDER_IN_PIXELS,
+              features->byte_alignment, &buf_residue->raw_frame_buffer,
+              pool_residue->get_fb_cb, pool_residue->cb_priv, false)) {
+        decrease_ref_count(buf_residue, pool_residue);
+        unlock_buffer_pool(pool_residue);
+        aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                           "Failed to allocate residue frame buffer");
+      }
+      unlock_buffer_pool(pool_residue);
+#endif
     }
   }
   if (features->error_resilient_mode) {
@@ -9320,6 +9590,9 @@ static int read_uncompressed_header(AV1Decoder *pbi,
     }
     features->refresh_frame_context = REFRESH_FRAME_CONTEXT_DISABLED;
     features->disable_cdf_update = 1;
+#if CONFIG_MSCNN // TODOCNN 下面的 cm->nn_loopfilter_info.nn_loopfilter_enable = 0; 还需要加吗
+    cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+#endif
 #if CONFIG_CWG_F317
     const RefCntBuffer *ref_buf;
     if (cm->bridge_frame_info.is_bridge_frame) {
@@ -9403,6 +9676,9 @@ static int read_uncompressed_header(AV1Decoder *pbi,
     cm->rst_info[0].frame_restoration_type = RESTORE_NONE;
     cm->rst_info[1].frame_restoration_type = RESTORE_NONE;
     cm->rst_info[2].frame_restoration_type = RESTORE_NONE;
+#if CONFIG_MSCNN
+    cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+#endif
   }
 
   if (features->tip_frame_mode == TIP_FRAME_AS_OUTPUT) {
@@ -9607,6 +9883,9 @@ static int read_uncompressed_header(AV1Decoder *pbi,
   if (!features->coded_lossless && seq_params->enable_cdef) {
     setup_cdef(cm, rb);
   }
+#if CONFIG_MSCNN
+  setup_nn_loopfilter(cm, rb);
+#endif
   if (!features->all_lossless && seq_params->enable_restoration) {
     decode_restoration_mode(cm, rb);
   }
@@ -10307,6 +10586,107 @@ void decoder_avg_tiles_cdfs(AV1Decoder *const pbi) {
 
 void av1_gdf_frame_dec(AV1_COMMON *cm) { gdf_filter_frame(cm); }
 
+#if CONFIG_MSCNN  // TODOCNN 参数类型需要换成uint16_t *吗
+void nn_loopfilter_frame(AV1Decoder *pbi, const uint8_t *data,
+                         const uint8_t *data_end, const uint8_t **p_data_end,
+                         int start_tile, int end_tile, int initialize_flag) {
+  AV1_COMMON *const cm = &pbi->common;
+
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
+
+    // Create a temporary frame for the loop filter
+    YV12_BUFFER_CONFIG *buffer = &pbi->common.cur_frame->buf;
+
+    YV12_BUFFER_CONFIG nnlf_frame;
+    memset(&nnlf_frame, 0, sizeof(YV12_BUFFER_CONFIG));
+    aom_alloc_frame_buffer(&nnlf_frame, buffer->y_crop_width,
+                           buffer->y_crop_height, buffer->subsampling_x,
+                           buffer->subsampling_y, buffer->border, 0, false);
+    aom_yv12_copy_frame(buffer, &nnlf_frame, 3);
+
+    YV12_BUFFER_CONFIG nn_pred_input;
+    memset(&nn_pred_input, 0, sizeof(YV12_BUFFER_CONFIG));
+    aom_alloc_frame_buffer(&nn_pred_input, buffer->y_crop_width,
+                           buffer->y_crop_height, buffer->subsampling_x,
+                           buffer->subsampling_y, buffer->border, 0, false);
+    aom_yv12_copy_frame(&nnlf_frame, &nn_pred_input, 3);
+    
+    buffer = NULL;
+
+
+    if (frame_is_intra_only(cm))
+      nn_loopfilter(&nnlf_frame, &pbi->common.cur_frame_residue->buf,
+                    &nn_dblk_input, cm->seq_params.bit_depth,
+                    cm->quant_params.base_qindex,
+                    cm->nn_loopfilter_info.model_idx);
+    else
+      nn_loopfilter_interpred(&nnlf_frame, &pbi->common.cur_frame_residue->buf,
+                              &nn_dblk_input, cm->seq_params.bit_depth,
+                              cm->quant_params.base_qindex,
+                              cm->nn_loopfilter_info.model_idx);
+
+    YV12_BUFFER_CONFIG nnlf_frame_scaled_residual;
+    YV12_BUFFER_CONFIG *buffer2 = &cm->cur_frame->buf;
+    memset(&nnlf_frame_scaled_residual, 0, sizeof(YV12_BUFFER_CONFIG));
+    aom_alloc_frame_buffer(&nnlf_frame_scaled_residual, buffer2->y_crop_width,
+                           buffer2->y_crop_height, buffer2->subsampling_x,
+                           buffer2->subsampling_y, buffer2->border, 0, false);
+    const int height = nnlf_frame_scaled_residual.y_crop_height;
+    const int width = nnlf_frame_scaled_residual.y_crop_width;
+    const int mult_residual_scaling[SCALING_COUNT] = { 1, 3, 1 };
+    const int right_shift_residual_scaling[SCALING_COUNT] = { 4, 6, 5 };
+    const int bit_depth_shift =
+        (cm->seq_params.bit_depth == 8)
+            ? 2
+            : 0;  // only 10-bit and 8-bit support (scale 8-bit by 4)
+
+    aom_yv12_copy_frame(&nn_pred_input, &nnlf_frame_scaled_residual, 3);
+    const int rs_idx = cm->nn_loopfilter_info.rs_idx;
+    const int mult = mult_residual_scaling[rs_idx];
+    const int shift = right_shift_residual_scaling[rs_idx];
+    uint16_t *pred = nnlf_frame_scaled_residual.y_buffer;
+    uint16_t *residual = nnlf_frame.y_buffer;
+    for (int h = 0; h < height; h++) {
+      for (int w = 0; w < width; w++) {
+        int res_val = (int16_t)residual[h * nnlf_frame.y_stride + w];
+        int pred_val = pred[h * nnlf_frame_scaled_residual.y_stride + w];
+        pred[h * nnlf_frame_scaled_residual.y_stride + w] = clip_pixel_highbd(
+            pred_val + ROUND_POWER_OF_TWO_SIGNED((mult * res_val),
+                                                 shift + bit_depth_shift),
+            cm->seq_params.bit_depth);
+      }
+    }
+
+    if (!cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable)
+      aom_yv12_copy_frame(&nnlf_frame_scaled_residual,
+                          &pbi->common.cur_frame->buf, 3);
+    else {
+      cm->nn_loopfilter_info.flag_count = 0;
+      int selected_blk_size = blk_sizes[cm->nn_loopfilter_info.blk_size_idx];
+      for (int h = 0; h < height; h += selected_blk_size) {
+        for (int w = 0; w < width; w += selected_blk_size) {
+          int blk_h = ((height - h) < selected_blk_size) ? (height - h)
+                                                         : selected_blk_size;
+          int blk_w = ((width - w) < selected_blk_size) ? (width - w)
+                                                        : selected_blk_size;
+
+          if (cm->nn_loopfilter_info
+                  .nn_loopfilter_flags[cm->nn_loopfilter_info.flag_count++]) {
+            aom_yv12_partial_copy_y_c(&nnlf_frame_scaled_residual, w, w + blk_w,
+                                      h, h + blk_h, &pbi->common.cur_frame->buf,
+                                      w, h);
+          }
+        }
+      }
+    }
+
+    aom_free_frame_buffer(&nnlf_frame_scaled_residual);
+    aom_free_frame_buffer(&nnlf_frame);
+    aom_free_frame_buffer(&nn_pred_input);
+  }
+}
+#endif
+
 void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
                                     const uint8_t *data_end,
                                     const uint8_t **p_data_end, int start_tile,
@@ -10396,14 +10776,35 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
   }
 
   if (!cm->bru.frame_inactive_flag) {
+#if CONFIG_MSCNN
+    YV12_BUFFER_CONFIG *buffer = &pbi->common.cur_frame->buf;
+    memset(&nn_dblk_input, 0, sizeof(YV12_BUFFER_CONFIG));
+    aom_alloc_frame_buffer(&nn_dblk_input, buffer->y_crop_width,
+                           buffer->y_crop_height, buffer->subsampling_x,
+                           buffer->subsampling_y, buffer->border, 0, false);
+    aom_yv12_copy_frame(buffer, &nn_dblk_input, 3);
+    buffer = NULL;
+#endif
     if (cm->lf.filter_level[0] || cm->lf.filter_level[1]) {
       if (pbi->num_workers > 1) {
+#if CONFIG_MSCNN
+        av1_loop_filter_frame_mt(&cm->cur_frame->buf,
+                                 &cm->cur_frame_residue->buf, cm, &pbi->dcb.xd,
+                                 0, num_planes, 0, pbi->tile_workers,
+                                 pbi->num_workers, &pbi->lf_row_sync);
+#else
         av1_loop_filter_frame_mt(&cm->cur_frame->buf, cm, &pbi->dcb.xd, 0,
                                  num_planes, 0, pbi->tile_workers,
                                  pbi->num_workers, &pbi->lf_row_sync);
+#endif
       } else {
+#if CONFIG_MSCNN
+        av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf,
+                              cm, &pbi->dcb.xd, 0, num_planes, 0);
+#else
         av1_loop_filter_frame(&cm->cur_frame->buf, cm, &pbi->dcb.xd, 0,
                               num_planes, 0);
+#endif
       }
     }
 
@@ -10444,7 +10845,11 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
 #if CONFIG_CONTROL_LOOPFILTERS_ACROSS_TILES
         !cm->seq_params.disable_loopfilters_across_tiles &&
 #endif  // CONFIG_CONTROL_LOOPFILTERS_ACROSS_TILES
-        !do_gdf && !use_ccso && !do_cdef;
+        !do_gdf && !use_ccso &&
+#if CONFIG_MSCNN
+        0 &&  // TODOCNN 需要加这个吗
+#endif
+        !do_cdef;
 
     if (!optimized_loop_restoration) {
       if (do_loop_restoration)
@@ -10465,10 +10870,23 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
                             pbi->tile_workers, &pbi->cdef_sync,
                             pbi->num_workers, av1_cdef_init_fb_row_mt);
         } else {
+#if CONFIG_MSCNN
+          av1_cdef_frame(&pbi->common.cur_frame->buf,
+                         &pbi->common.cur_frame_residue->buf, cm, &pbi->dcb.xd,
+                         av1_cdef_init_fb_row);
+#else
           av1_cdef_frame(&pbi->common.cur_frame->buf, cm, &pbi->dcb.xd,
                          av1_cdef_init_fb_row);
+#endif
         }
       }
+#if CONFIG_MSCNN
+      nn_loopfilter_frame(pbi, data, data_end, p_data_end, start_tile, end_tile,
+                          initialize_flag);
+#endif
+#if CONFIG_MSCNN
+      aom_free_frame_buffer(&nn_dblk_input); // TODOCNN 需要释放吗
+#endif
       if (use_ccso) {
         if (pbi->num_workers > 1
 #if CONFIG_CONTROL_LOOPFILTERS_ACROSS_TILES
@@ -10479,7 +10897,12 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
           av1_ccso_frame_mt(&cm->cur_frame->buf, cm, xd, pbi->tile_workers,
                             pbi->num_workers, ext_rec_y, &pbi->ccso_sync);
         } else {
+#if CONFIG_MSCNN
+          ccso_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd,
+                     ext_rec_y);
+#else
           ccso_frame(&cm->cur_frame->buf, cm, xd, ext_rec_y);
+#endif
         }
         aom_free(ext_rec_y);
       }

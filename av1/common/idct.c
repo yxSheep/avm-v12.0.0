@@ -995,12 +995,38 @@ static void av1_highbd_inv_txfm_add_master(const tran_low_t *input,
   av1_highbd_inv_txfm_add(input, dest, stride, txfm_param);
 }
 
+#if CONFIG_MSCNN
+void av1_inverse_transform_block(const MACROBLOCKD *xd,
+                                 const tran_low_t *dqcoeff, int plane,
+                                 TX_TYPE tx_type, TX_SIZE tx_size,
+                                 uint16_t *dst, int stride,
+                                 uint16_t *dstResidue, int strideResidue,
+                                 int eob, int use_ddt, int reduced_tx_set) {
+#else
 void av1_inverse_transform_block(const MACROBLOCKD *xd,
                                  const tran_low_t *dqcoeff, int plane,
                                  TX_TYPE tx_type, TX_SIZE tx_size,
                                  uint16_t *dst, int stride, int eob,
                                  int use_ddt, int reduced_tx_set) {
+#endif
+#if CONFIG_MSCNN
+  if (!eob) {
+    // zero residue
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
+
+    int32_t *residuePtr = (int32_t *)dstResidue;
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr[r * strideResidue + c] = 0;
+      }
+    }
+    return;
+  }
+#else
   if (!eob) return;
+#endif
 
   assert(eob <= av1_get_max_eob(tx_size));
 
@@ -1017,6 +1043,21 @@ void av1_inverse_transform_block(const MACROBLOCKD *xd,
   memcpy(temp_dqcoeff, dqcoeff, sizeof(tran_low_t) * tx_size_2d[tx_size]);
 
   av1_inv_stxfm(temp_dqcoeff, &txfm_param);
+
+#if CONFIG_MSCNN
+  assert(strideResidue == stride);
+  uint16_t *predPtr = dst;
+
+  DECLARE_ALIGNED(16, uint16_t, pred[MAX_TX_SQUARE]);
+  int pred_stride = MAX_TX_SIZE;
+  int w = tx_size_wide[tx_size];
+  int h = tx_size_high[tx_size];
+  for (int r = 0; r < h; ++r) {
+    for (int c = 0; c < w; ++c) {
+      pred[r * pred_stride + c] = predPtr[r * stride + c];
+    }
+  }
+#endif
 
   MB_MODE_INFO *const mbmi = xd->mi[0];
   if (xd->lossless[mbmi->segment_id]) {
@@ -1036,6 +1077,17 @@ void av1_inverse_transform_block(const MACROBLOCKD *xd,
   } else {
     av1_highbd_inv_txfm_add_master(temp_dqcoeff, dst, stride, &txfm_param);
   }
+
+#if CONFIG_MSCNN
+  int32_t *residuePtr = (int32_t *)dstResidue;
+  uint16_t *recon = dst;
+  for (int r = 0; r < h; ++r) {
+    for (int c = 0; c < w; ++c) {
+      // residue
+      residuePtr[r * strideResidue + c] = (int32_t) (recon[r * stride + c]) - (int32_t) (pred[r * pred_stride + c]);
+    }
+  }
+#endif
 }
 
 // Inverse secondary transform

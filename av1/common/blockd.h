@@ -1537,6 +1537,10 @@ typedef struct macroblockd_plane {
   int subsampling_y;
   struct buf_2d dst;
   struct buf_2d pre[2];
+#if CONFIG_MSCNN
+  struct buf_2d dstResidue;
+  struct buf_2d preResidue[2];
+#endif
   ENTROPY_CONTEXT *above_entropy_context;
   ENTROPY_CONTEXT *left_entropy_context;
 
@@ -2344,6 +2348,10 @@ typedef struct macroblockd {
    *  Temporary buffer used for upsampled prediction.
    */
   uint16_t *tmp_upsample_pred;
+
+#if CONFIG_MSCNN
+  uint16_t *tmpResidue_bufs[2];
+#endif
 
   /*!
    * Enable IST for current coding block.

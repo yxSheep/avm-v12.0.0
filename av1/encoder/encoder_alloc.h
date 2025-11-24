@@ -248,6 +248,9 @@ static AOM_INLINE void dealloc_compressor_data(AV1_COMP *cpi) {
   cpi->td.firstpass_ctx = NULL;
 
   av1_free_ref_frame_buffers(cm->buffer_pool);
+#if CONFIG_MSCNN
+  av1_free_residue_frame_buffers(cm->buffer_pool_residue);
+#endif
   av1_free_txb_buf(cpi);
   av1_free_context_buffers(cm);
 
@@ -290,6 +293,9 @@ static AOM_INLINE void dealloc_compressor_data(AV1_COMP *cpi) {
   aom_free(cpi->td.mb.opfl_dst_bufs);
   for (int j = 0; j < 2; ++j) {
     aom_free(cpi->td.mb.tmp_pred_bufs[j]);
+#if CONFIG_MSCNN
+    aom_free(cpi->td.mb.tmpResidue_bufs[j]);
+#endif
   }
 
 #if CONFIG_DENOISE

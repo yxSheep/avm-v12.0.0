@@ -44,6 +44,16 @@ extern "C" {
  * \arg \c damping_factor: CDEF damping factor.
  *
  */
+#if CONFIG_MSCNN
+void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
+                     const YV12_BUFFER_CONFIG *residue,
+                     const YV12_BUFFER_CONFIG *ref, AV1_COMMON *cm,
+                     MACROBLOCKD *xd,
+#if CONFIG_ENTROPY_STATS
+                     ThreadData *td,
+#endif  // CONFIG_ENTROPY_STATS
+                     CDEF_PICK_METHOD pick_method, int rdmult);
+#else
 void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
                      const YV12_BUFFER_CONFIG *ref, AV1_COMMON *cm,
                      MACROBLOCKD *xd,
@@ -51,6 +61,7 @@ void av1_cdef_search(const YV12_BUFFER_CONFIG *frame,
                      ThreadData *td,
 #endif  // CONFIG_ENTROPY_STATS
                      CDEF_PICK_METHOD pick_method, int rdmult);
+#endif
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -143,6 +143,25 @@ typedef struct yv12_buffer_config {
 } YV12_BUFFER_CONFIG;
 
 /*!\cond */
+#if CONFIG_MSCNN
+int aom_alloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
+                           int ss_x, int ss_y, int border, int byte_alignment,
+                           bool alloc_pyramid);
+
+// Updates the yv12 buffer config with the frame buffer. |byte_alignment| must
+// be a power of 2, from 32 to 1024. 0 sets legacy alignment. If cb is not
+// NULL, then libaom is using the frame buffer callbacks to handle memory.
+// If cb is not NULL, libaom will call cb with minimum size in bytes needed
+// to decode the current frame. If cb is NULL, libaom will allocate memory
+// internally to decode the current frame. Returns 0 on success. Returns < 0
+// on failure.
+int aom_realloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
+                             int ss_x, int ss_y, int border, int byte_alignment,
+                             aom_codec_frame_buffer_t *fb,
+                             aom_get_frame_buffer_cb_fn_t cb, void *cb_priv,
+                             bool alloc_pyramid);
+
+#endif
 
 // Allocate a frame buffer
 //

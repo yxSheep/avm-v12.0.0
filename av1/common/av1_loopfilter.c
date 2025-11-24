@@ -1311,9 +1311,16 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
   }
 }
 
+#if CONFIG_MSCNN
+static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer,
+                             YV12_BUFFER_CONFIG *residue_buffer, AV1_COMMON *cm,
+                             MACROBLOCKD *xd, int start, int stop,
+                             int plane_start, int plane_end) {
+#else
 static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
                              MACROBLOCKD *xd, int start, int stop,
                              int plane_start, int plane_end) {
+#endif
   struct macroblockd_plane *pd = xd->plane;
   const int col_start = 0;
   const int col_end = cm->mi_params.mi_cols;
@@ -1334,21 +1341,36 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
       for (mi_row = start; mi_row < stop; mi_row += mib_size) {
         for (mi_col = col_start; mi_col < col_end; mi_col += mib_size) {
           // filter vertical edges
+#if CONFIG_MSCNN
+          av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
+                               plane, plane + 1, NULL);
+#else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
+#endif
           av1_filter_block_plane_vert(cm, xd, plane, &pd[plane], mi_row,
                                       mi_col);
           // filter horizontal edges
           if (mi_col - mib_size >= 0) {
+#if CONFIG_MSCNN
+            av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row,
+                                 mi_col - mib_size, plane, plane + 1, NULL);
+#else
             av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col - mib_size,
                                  plane, plane + 1, NULL);
+#endif
             av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
                                         mi_col - mib_size);
           }
         }
         // filter horizontal edges
+#if CONFIG_MSCNN
+        av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row,
+                             mi_col - mib_size, plane, plane + 1, NULL);
+#else
         av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col - mib_size, plane,
                              plane + 1, NULL);
+#endif
         av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
                                     mi_col - mib_size);
       }
@@ -1356,8 +1378,13 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
       // filter all vertical edges in every 128x128 super block
       for (mi_row = start; mi_row < stop; mi_row += mib_size) {
         for (mi_col = col_start; mi_col < col_end; mi_col += mib_size) {
+#if CONFIG_MSCNN
+          av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
+                               plane, plane + 1, NULL);
+#else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
+#endif
           av1_filter_block_plane_vert(cm, xd, plane, &pd[plane], mi_row,
                                       mi_col);
         }
@@ -1366,8 +1393,13 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
       // filter all horizontal edges in every 128x128 super block
       for (mi_row = start; mi_row < stop; mi_row += mib_size) {
         for (mi_col = col_start; mi_col < col_end; mi_col += mib_size) {
+#if CONFIG_MSCNN
+          av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
+                               plane, plane + 1, NULL);
+#else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
+#endif
           av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
                                       mi_col);
         }
@@ -1376,9 +1408,16 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
   }
 }
 
+#if CONFIG_MSCNN
+void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, 
+                           YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm,
+                           MACROBLOCKD *xd, int plane_start, int plane_end,
+                           int partial_frame) {
+#else
 void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
                            MACROBLOCKD *xd, int plane_start, int plane_end,
                            int partial_frame) {
+#endif
 #if CONFIG_CWG_F317
   if (cm->bridge_frame_info.is_bridge_frame) {
     return;
@@ -1394,8 +1433,13 @@ void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
   }
   end_mi_row = start_mi_row + mi_rows_to_filter;
   av1_loop_filter_frame_init(cm, plane_start, plane_end);
+#if CONFIG_MSCNN
+  loop_filter_rows(frame, residue, cm, xd, start_mi_row, end_mi_row, plane_start,
+                   plane_end);
+#else
   loop_filter_rows(frame, cm, xd, start_mi_row, end_mi_row, plane_start,
                    plane_end);
+#endif
 }
 
 // Set TIP filter length

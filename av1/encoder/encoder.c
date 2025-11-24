@@ -50,7 +50,10 @@
 #include "av1/common/resize.h"
 #include "av1/common/tile_common.h"
 #include "av1/common/tip.h"
-
+#if 0  // DEBUG
+#include "av1/av1_iface_common.h"
+#include "common/md5_utils.h"
+#endif
 #include "av1/encoder/aq_complexity.h"
 #include "av1/encoder/aq_cyclicrefresh.h"
 #include "av1/encoder/aq_variance.h"
@@ -84,7 +87,12 @@
 #include "av1/encoder/subgop.h"
 #include "av1/encoder/superres_scale.h"
 #include "av1/encoder/tpl_model.h"
+#if CONFIG_MSCNN
+#include "av1/common/nn_loopfilter.h"
 
+// Create a temporary frame for the loop filter
+static YV12_BUFFER_CONFIG nn_dblk_input;
+#endif
 #if CONFIG_ML_PART_SPLIT
 #include "av1/encoder/part_split_prune_tflite.h"
 #endif  // CONFIG_ML_PART_SPLIT
@@ -1197,11 +1205,20 @@ static INLINE void free_optflow_bufs(AV1_COMMON *const cm) {
   aom_free(cm->gx1);
 }
 
+#if CONFIG_MSCNN
+AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf, BufferPool *const pool,
+                                BufferPool *const pool_residue,
+                                FIRSTPASS_STATS *frame_stats_buf,
+                                COMPRESSOR_STAGE stage, int num_lap_buffers,
+                                int lap_lag_in_frames,
+                                STATS_BUFFER_CTX *stats_buf_context) {
+#else
 AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf, BufferPool *const pool,
                                 FIRSTPASS_STATS *frame_stats_buf,
                                 COMPRESSOR_STAGE stage, int num_lap_buffers,
                                 int lap_lag_in_frames,
                                 STATS_BUFFER_CTX *stats_buf_context) {
+#endif
   AV1_COMP *volatile const cpi = aom_memalign(32, sizeof(AV1_COMP));
   AV1_COMMON *volatile const cm = cpi != NULL ? &cpi->common : NULL;
 
@@ -1248,6 +1265,9 @@ AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf, BufferPool *const pool,
   memset(cm->default_frame_context, 0, sizeof(*cm->default_frame_context));
 
   cpi->common.buffer_pool = pool;
+#if CONFIG_MSCNN
+  cpi->common.buffer_pool_residue = pool_residue;
+#endif
 
   init_config(cpi, oxcf);
   if (cpi->compressor_stage == LAP_STAGE) {
@@ -1701,7 +1721,9 @@ void av1_remove_compressor(AV1_COMP *cpi) {
 
   av1_remove_common(cm);
   av1_free_ref_frame_buffers(cm->buffer_pool);
-
+#if CONFIG_MSCNN
+  av1_free_residue_frame_buffers(cm->buffer_pool_residue);
+#endif
 #if DEBUG_EXTQUANT
   if (cpi->common.fEncCoeffLog != NULL) {
     fclose(cpi->common.fEncCoeffLog);
@@ -2202,6 +2224,13 @@ static void init_ref_frame_bufs(AV1_COMP *cpi) {
   for (i = 0; i < FRAME_BUFFERS; ++i) {
     pool->frame_bufs[i].ref_count = 0;
   }
+#if CONFIG_MSCNN
+  BufferPool *const pool_residue = cm->buffer_pool_residue;
+  cm->cur_frame_residue = NULL;
+  for (i = 0; i < 1; ++i) {
+    pool_residue->frame_bufs[i].ref_count = 0;
+  }
+#endif
 }
 
 void av1_check_initial_width(AV1_COMP *cpi, int subsampling_x,
@@ -2361,7 +2390,16 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
     av1_alloc_cdef_buffers(cm, &cdef_worker /* dummy */, &cdef_sync /* dummy */,
                            1);
   }
-
+#if CONFIG_MSCNN
+  // Reset the residue frame pointers to the current frame size.
+  if (aom_realloc_residue_frame_buffer(
+          &cm->cur_frame_residue->buf, cm->width, cm->height,
+          seq_params->subsampling_x, seq_params->subsampling_y,
+          cpi->oxcf.border_in_pixels, cm->features.byte_alignment, NULL, NULL,
+          NULL, cpi->alloc_pyramid))
+    aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                       "Failed to allocate residue frame buffer");
+#endif
   const int frame_width = cm->width;
   const int frame_height = cm->height;
   set_restoration_unit_size(
@@ -2374,7 +2412,9 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
       seq_params->subsampling_y, cm->rst_info);
   for (int i = 0; i < num_planes; ++i)
     cm->rst_info[i].frame_restoration_type = RESTORE_NONE;
-
+#if CONFIG_MSCNN
+  cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+#endif
   av1_alloc_restoration_buffers(cm);
   if (!is_stat_generation_stage(cpi)) alloc_util_frame_buffers(cpi);
   init_motion_estimation(cpi);
@@ -2746,6 +2786,364 @@ void gdf_optimize_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
   }
 }
 
+#if CONFIG_MSCNN
+static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
+                                MACROBLOCKD *xd) {
+
+  // TODO: Reduce number of buffer copies
+  YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
+
+  YV12_BUFFER_CONFIG nnlf_frame;
+  memset(&nnlf_frame, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&nnlf_frame, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &nnlf_frame, 3);
+
+  YV12_BUFFER_CONFIG nn_pred_input;
+  memset(&nn_pred_input, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&nn_pred_input, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+  aom_yv12_copy_frame(&nnlf_frame, &nn_pred_input, 3);
+  buffer = NULL;
+
+  MACROBLOCK *const x = &cpi->td.mb;
+  ModeCosts *mode_costs = &x->mode_costs;
+  FRAME_CONTEXT *fc = x->e_mbd.tile_ctx;
+  for (int i = 0; i < 2; ++i)
+    for (int j = 0; j < 2; ++j)
+      av1_cost_tokens_from_cdf(mode_costs->nn_cost[i][j], fc->nn_cdf[i][j], 2,
+                               NULL); // TODOCNN 第三个参数该填什么
+
+  double best_rdcost_model = DBL_MAX;
+  // Create a temporary frame for the loop filter
+  YV12_BUFFER_CONFIG nn_best_output;
+  YV12_BUFFER_CONFIG *buffer_o = &cm->cur_frame->buf;
+  memset(&nn_best_output, 0, sizeof(YV12_BUFFER_CONFIG));
+  if (aom_alloc_frame_buffer(&nn_best_output, buffer_o->y_crop_width,
+                             buffer_o->y_crop_height, buffer_o->subsampling_x,
+                             buffer_o->subsampling_y, buffer_o->border, 0, false)) {
+    printf("Error allocating memory for nn best output frame\n");
+    exit(0);
+  }
+
+  // Create a temporary frame for the scaled residual
+  YV12_BUFFER_CONFIG nnlf_frame_scaled_residual;
+  YV12_BUFFER_CONFIG *buffer_rs = &cm->cur_frame->buf;
+  memset(&nnlf_frame_scaled_residual, 0, sizeof(YV12_BUFFER_CONFIG));
+  if (aom_alloc_frame_buffer(&nnlf_frame_scaled_residual,
+                             buffer_rs->y_crop_width, buffer_rs->y_crop_height,
+                             buffer_rs->subsampling_x, buffer_rs->subsampling_y,
+                             buffer_rs->border, 0,false)) {
+    printf("Error allocating memory for scaled residual frame\n");
+    exit(0);
+  }
+
+  const int height = nnlf_frame.y_crop_height;
+  const int width = nnlf_frame.y_crop_width;
+  const int mult_residual_scaling[SCALING_COUNT] = { 1, 3, 1 };
+  const int right_shift_residual_scaling[SCALING_COUNT] = { 4, 6, 5 };
+  int64_t *blk_sse_loopfilter[BLK_SIZE_COUNT];
+  int64_t *blk_sse_decoded[BLK_SIZE_COUNT];
+  uint8_t *flags[BLK_SIZE_COUNT];
+
+  // SSE Unfiltered
+  // printf("compute unfiltered sse\n");
+  int64_t sse_decoded = aom_get_sse_plane(cpi->source, &cm->cur_frame->buf, 0);
+  const int64_t rdmult =
+      av1_compute_rd_mult_based_on_qindex(cpi, cm->quant_params.base_qindex);
+  const double rdcost_unfiltered =
+      RDCOST_DBL_WITH_NATIVE_BD_DIST(rdmult, 1 << (AV1_PROB_COST_SHIFT - 4),
+                                     sse_decoded, cm->seq_params.bit_depth);
+
+  for (int blk_size_idx = 0; blk_size_idx < BLK_SIZE_COUNT; blk_size_idx++) {
+    const int cur_blk_size = blk_sizes[blk_size_idx];
+    const int blk_stride = (int)ceil(width / (double)cur_blk_size);
+    const int max_flag_count =
+        (int)ceil(height / (double)cur_blk_size) * blk_stride;
+    blk_sse_loopfilter[blk_size_idx] = (int64_t *)aom_memalign(
+        32, (size_t)SCALING_COUNT * max_flag_count * sizeof(int64_t));
+    blk_sse_decoded[blk_size_idx] = (int64_t *)aom_memalign(
+        32, (size_t)SCALING_COUNT * max_flag_count * sizeof(int64_t));
+    flags[blk_size_idx] = (uint8_t *)aom_memalign(
+        32, (size_t)SCALING_COUNT * max_flag_count * sizeof(uint8_t));
+  }
+
+  bool nnlf_frame_modified = false;
+  for (int model_idx = 0; model_idx < MODEL_COUNT; model_idx++) {
+    if (nnlf_frame_modified) {
+      aom_yv12_copy_y(&nn_pred_input, &nnlf_frame);
+      nnlf_frame_modified = false;
+    }
+
+    if (frame_is_intra_only(cm))
+      nn_loopfilter(&nnlf_frame, &cm->cur_frame_residue->buf, &nn_dblk_input,
+                    cm->seq_params.bit_depth, cm->quant_params.base_qindex,
+                    model_idx);
+    else
+      nn_loopfilter_interpred(&nnlf_frame, &cm->cur_frame_residue->buf,
+                              &nn_dblk_input, cm->seq_params.bit_depth,
+                              cm->quant_params.base_qindex, model_idx);
+    nnlf_frame_modified = true;
+
+    int64_t flag_bit_count[BLK_SIZE_COUNT][SCALING_COUNT] = { 0 };
+    int64_t sse_loopfilter_no_blk_control[SCALING_COUNT] = { 0 };
+    int64_t sse_loopfilter_with_blk_control[BLK_SIZE_COUNT][SCALING_COUNT] = {
+      0
+    };
+    const int bit_depth_shift =
+        (cm->seq_params.bit_depth == 8)
+            ? 2
+            : 0;  // only 10-bit and 8-bit support (scale 8-bit by 4)
+
+    for (int blk_size_idx = 0; blk_size_idx < BLK_SIZE_COUNT; blk_size_idx++) {
+      const int cur_blk_size = blk_sizes[blk_size_idx];
+      const int blk_stride = (int)ceil(width / (double)cur_blk_size);
+      const int max_flag_count =
+          (int)ceil(height / (double)cur_blk_size) * blk_stride;
+
+      memset(blk_sse_loopfilter[blk_size_idx], 0,
+             SCALING_COUNT * max_flag_count * sizeof(int64_t));
+      memset(blk_sse_decoded[blk_size_idx], 0,
+             SCALING_COUNT * max_flag_count * sizeof(int64_t));
+      memset(flags[blk_size_idx], 0,
+             SCALING_COUNT * max_flag_count * sizeof(uint8_t));
+    }
+
+    for (int rs_idx = 0; rs_idx < SCALING_COUNT;
+         rs_idx++) {  // residual scaling
+      int mult = mult_residual_scaling[rs_idx];
+      int shift = right_shift_residual_scaling[rs_idx];
+      aom_yv12_copy_frame(&nn_pred_input, &nnlf_frame_scaled_residual, 3);
+      uint16_t *pred = nnlf_frame_scaled_residual.y_buffer;
+      uint16_t *residual = nnlf_frame.y_buffer;
+      for (int h = 0; h < height; h++) {
+        for (int w = 0; w < width; w++) {
+          int res_val = (int16_t)residual[h * nnlf_frame.y_stride + w];
+          int pred_val = pred[h * nnlf_frame_scaled_residual.y_stride + w];
+          pred[h * nnlf_frame_scaled_residual.y_stride + w] = clip_pixel_highbd(
+              pred_val + ROUND_POWER_OF_TWO_SIGNED((mult * res_val),
+                                                   shift + bit_depth_shift),
+              cm->seq_params.bit_depth);
+        }
+      }
+
+      // SSE with picture level ON (no block level control)
+      sse_loopfilter_no_blk_control[rs_idx] =
+          aom_get_sse_plane(cpi->source, &nnlf_frame_scaled_residual, 0);
+      for (int blk_size_idx = 0; blk_size_idx < BLK_SIZE_COUNT;
+           blk_size_idx++) {
+        const int cur_blk_size = blk_sizes[blk_size_idx];
+        const int blk_stride = (int)ceil(width / (double)cur_blk_size);
+        const int max_flag_count =
+            (int)ceil(height / (double)cur_blk_size) * blk_stride;
+        for (int h = 0, blk_idx = 0; h < height; h += cur_blk_size) {
+          for (int w = 0; w < width; w += cur_blk_size) {
+            int blk_h =
+                ((height - h) < cur_blk_size) ? (height - h) : cur_blk_size;
+            int blk_w =
+                ((width - w) < cur_blk_size) ? (width - w) : cur_blk_size;
+            uint8_t top_ctx = ((blk_idx - blk_stride) < 0)
+                                  ? 0
+                                  : flags[blk_size_idx][rs_idx * blk_stride +
+                                                        (blk_idx - blk_stride)];
+            uint8_t left_ctx =
+                ((blk_idx % blk_stride) == 0)
+                    ? 0
+                    : flags[blk_size_idx][rs_idx * blk_stride + (blk_idx - 1)];
+
+            blk_sse_loopfilter[blk_size_idx]
+                              [rs_idx * max_flag_count + blk_idx] =
+                                  aom_highbd_get_y_sse_part(
+                                      cpi->source, &nnlf_frame_scaled_residual,
+                                      w, blk_w, h, blk_h);
+            blk_sse_decoded[blk_size_idx][rs_idx * max_flag_count + blk_idx] =
+                aom_highbd_get_y_sse_part(cpi->source, &cm->cur_frame->buf, w,
+                                          blk_w, h, blk_h);
+            const double blk_rdcost_loopfilter = RDCOST_DBL_WITH_NATIVE_BD_DIST(
+                rdmult, x->mode_costs.nn_cost[left_ctx][top_ctx][1] >> 4,
+                blk_sse_loopfilter[blk_size_idx]
+                                  [rs_idx * max_flag_count + blk_idx],
+                cm->seq_params.bit_depth);
+            const double blk_rdcost_decoded = RDCOST_DBL_WITH_NATIVE_BD_DIST(
+                rdmult, x->mode_costs.nn_cost[left_ctx][top_ctx][0] >> 4,
+                blk_sse_decoded[blk_size_idx]
+                               [rs_idx * max_flag_count + blk_idx],
+                cm->seq_params.bit_depth);
+
+            if (blk_rdcost_loopfilter < blk_rdcost_decoded) {
+              flag_bit_count[blk_size_idx][rs_idx] +=
+                  x->mode_costs.nn_cost[left_ctx][top_ctx][1];
+              flags[blk_size_idx][rs_idx * blk_stride + blk_idx] = 1;
+              sse_loopfilter_with_blk_control[blk_size_idx][rs_idx] +=
+                  blk_sse_loopfilter[blk_size_idx]
+                                    [rs_idx * max_flag_count + blk_idx];
+            } else {
+              flag_bit_count[blk_size_idx][rs_idx] +=
+                  x->mode_costs.nn_cost[left_ctx][top_ctx][0];
+              flags[blk_size_idx][rs_idx * blk_stride + blk_idx] = 0;
+              sse_loopfilter_with_blk_control[blk_size_idx][rs_idx] +=
+                  blk_sse_decoded[blk_size_idx]
+                                 [rs_idx * max_flag_count + blk_idx];
+            }
+            blk_idx++;
+          }
+        }
+      }
+    }
+
+    double best_rdcost_filtered_with_blk_control;
+    int best_blk_size_idx = 0;
+    int best_filtered_with_blk_control_rs_idx = 0;
+    best_rdcost_filtered_with_blk_control = RDCOST_DBL_WITH_NATIVE_BD_DIST(
+        rdmult,
+        ((1 + 1 + 1 + 2 + MODEL_BITS) << (AV1_PROB_COST_SHIFT - 4)) +
+            (flag_bit_count[0][0] >> 4),
+        sse_loopfilter_with_blk_control[0][0],
+        cm->seq_params.bit_depth);  // residual: 1: 0, 01: 1, 00: 2
+    for (int blk_size_idx = 0; blk_size_idx < BLK_SIZE_COUNT; blk_size_idx++) {
+      for (int rs_idx = 0; rs_idx < SCALING_COUNT;
+           rs_idx++) {  // residual scaling
+        if (blk_size_idx == 0 && rs_idx == 0) continue;
+
+        const double rdcost_filtered_with_blk_control =
+            RDCOST_DBL_WITH_NATIVE_BD_DIST(
+                rdmult,
+                ((1 + 1 + ((rs_idx == 0) ? 1 : 2) + 2 + MODEL_BITS)
+                 << (AV1_PROB_COST_SHIFT - 4)) +
+                    (flag_bit_count[blk_size_idx][rs_idx] >> 4),
+                sse_loopfilter_with_blk_control[blk_size_idx][rs_idx],
+                cm->seq_params.bit_depth);
+        if (rdcost_filtered_with_blk_control <
+            best_rdcost_filtered_with_blk_control) {
+          best_rdcost_filtered_with_blk_control =
+              rdcost_filtered_with_blk_control;
+          best_filtered_with_blk_control_rs_idx = rs_idx;
+          best_blk_size_idx = blk_size_idx;
+        }
+      }
+    }
+
+    double best_rdcost_filtered_no_blk_control = RDCOST_DBL_WITH_NATIVE_BD_DIST(
+        rdmult, (1 + 1 + 1 + MODEL_BITS) << (AV1_PROB_COST_SHIFT - 4),
+        sse_loopfilter_no_blk_control[0], cm->seq_params.bit_depth);
+    int best_filtered_no_blk_control_rs_idx = 0;
+    for (int rs_idx = 1; rs_idx < SCALING_COUNT;
+         rs_idx++) {  // residual scaling
+      const double rdcost_filtered_no_blk_control =
+          RDCOST_DBL_WITH_NATIVE_BD_DIST(
+              rdmult, (1 + 1 + 2 + MODEL_BITS) << (AV1_PROB_COST_SHIFT - 4),
+              sse_loopfilter_no_blk_control[rs_idx], cm->seq_params.bit_depth);
+      if (rdcost_filtered_no_blk_control <
+          best_rdcost_filtered_no_blk_control) {
+        best_rdcost_filtered_no_blk_control = rdcost_filtered_no_blk_control;
+        best_filtered_no_blk_control_rs_idx = rs_idx;
+      }
+    }
+
+    if (best_rdcost_filtered_with_blk_control < best_rdcost_model &&
+        best_rdcost_filtered_with_blk_control < rdcost_unfiltered &&
+        best_rdcost_filtered_with_blk_control <
+            best_rdcost_filtered_no_blk_control) {
+      aom_yv12_copy_y(&nn_pred_input, &nnlf_frame_scaled_residual);
+      const int cur_blk_size = blk_sizes[best_blk_size_idx];
+      const int blk_stride = (int)ceil(width / (double)cur_blk_size);
+      const int max_flag_count =
+          (int)ceil(height / (double)cur_blk_size) * blk_stride;
+      int rs_idx = best_filtered_with_blk_control_rs_idx;
+      int mult = mult_residual_scaling[rs_idx];
+      int shift = right_shift_residual_scaling[rs_idx];
+      uint16_t *pred = nnlf_frame_scaled_residual.y_buffer;
+      uint16_t *residual = nnlf_frame.y_buffer;
+      for (int h = 0; h < height; h++) {
+        for (int w = 0; w < width; w++) {
+          int res_val = (int16_t)residual[h * nnlf_frame.y_stride + w];
+          int pred_val = pred[h * nnlf_frame_scaled_residual.y_stride + w];
+          pred[h * nnlf_frame_scaled_residual.y_stride + w] = clip_pixel_highbd(
+              pred_val + ROUND_POWER_OF_TWO_SIGNED((mult * res_val),
+                                                   shift + bit_depth_shift),
+              cm->seq_params.bit_depth);
+        }
+      }
+
+      best_rdcost_model = best_rdcost_filtered_with_blk_control;
+      cm->nn_loopfilter_info.model_idx = model_idx;
+      cm->nn_loopfilter_info.nn_loopfilter_enable = 1;
+      cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable = 1;
+      cm->nn_loopfilter_info.stride = blk_stride;
+      cm->nn_loopfilter_info.rs_idx = rs_idx;
+      cm->nn_loopfilter_info.blk_size_idx = best_blk_size_idx;
+      cm->nn_loopfilter_info.flag_count = max_flag_count;
+
+      // copy corresponding blocks
+      for (int h = 0, blk_idx = 0; h < height; h += cur_blk_size) {
+        for (int w = 0; w < width; w += cur_blk_size) {
+          int blk_h =
+              ((height - h) < cur_blk_size) ? (height - h) : cur_blk_size;
+          int blk_w = ((width - w) < cur_blk_size) ? (width - w) : cur_blk_size;
+          if (blk_sse_loopfilter[best_blk_size_idx]
+                                [rs_idx * max_flag_count + blk_idx] <
+              blk_sse_decoded[best_blk_size_idx]
+                             [rs_idx * max_flag_count + blk_idx]) {
+            cm->nn_loopfilter_info.nn_loopfilter_flags[blk_idx] = 1;
+            aom_yv12_partial_copy_y_c(&nnlf_frame_scaled_residual, w, w + blk_w,
+                                      h, h + blk_h, &nn_best_output, w, h);
+          } else {
+            cm->nn_loopfilter_info.nn_loopfilter_flags[blk_idx] = 0;
+            aom_yv12_partial_copy_y_c(&cm->cur_frame->buf, w, w + blk_w, h,
+                                      h + blk_h, &nn_best_output, w, h);
+          }
+          blk_idx++;
+        }
+      }
+    } else if (best_rdcost_filtered_no_blk_control < best_rdcost_model &&
+               best_rdcost_filtered_no_blk_control < rdcost_unfiltered) {
+      aom_yv12_copy_y(&nn_pred_input, &nnlf_frame_scaled_residual);
+      int rs_idx = best_filtered_no_blk_control_rs_idx;
+      int mult = mult_residual_scaling[rs_idx];
+      int shift = right_shift_residual_scaling[rs_idx];
+      uint16_t *pred = nnlf_frame_scaled_residual.y_buffer;
+      uint16_t *residual = nnlf_frame.y_buffer;
+      for (int h = 0; h < height; h++) {
+        for (int w = 0; w < width; w++) {
+          int res_val = (int16_t)residual[h * nnlf_frame.y_stride + w];
+          int pred_val = pred[h * nnlf_frame_scaled_residual.y_stride + w];
+          pred[h * nnlf_frame_scaled_residual.y_stride + w] = clip_pixel_highbd(
+              pred_val + ROUND_POWER_OF_TWO_SIGNED((mult * res_val),
+                                                   shift + bit_depth_shift),
+              cm->seq_params.bit_depth);
+        }
+      }
+
+      best_rdcost_model = best_rdcost_filtered_no_blk_control;
+      cm->nn_loopfilter_info.model_idx = model_idx;
+      cm->nn_loopfilter_info.nn_loopfilter_enable = 1;
+      cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable = 0;
+      cm->nn_loopfilter_info.rs_idx = rs_idx;
+      cm->nn_loopfilter_info.flag_count = 0;
+      aom_yv12_copy_y(&nnlf_frame_scaled_residual, &nn_best_output);
+    } else if (rdcost_unfiltered < best_rdcost_model) {
+      best_rdcost_model = rdcost_unfiltered;
+      cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+    }
+  }
+
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
+    aom_yv12_copy_y(&nn_best_output, &cm->cur_frame->buf);
+  }
+
+  for (int blk_size_idx = 0; blk_size_idx < BLK_SIZE_COUNT; blk_size_idx++) {
+    aom_free(blk_sse_loopfilter[blk_size_idx]);
+    aom_free(blk_sse_decoded[blk_size_idx]);
+    aom_free(flags[blk_size_idx]);
+  }
+  aom_free_frame_buffer(&nnlf_frame_scaled_residual);
+  aom_free_frame_buffer(&nn_best_output);
+  aom_free_frame_buffer(&nn_pred_input);
+}
+#endif
+
 /*!\brief Select and apply cdef filters and switchable restoration filters
  *
  * \ingroup high_level_algo
@@ -2766,8 +3164,13 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
 #endif  // CONFIG_CWG_F317
                        cm->seq_params.enable_ccso;
   const int num_planes = av1_num_planes(cm);
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
+                       &cm->cur_frame_residue->buf, 0, 0, 0, num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 0, 0, 0, num_planes,
                        NULL);
+#endif
   const int ccso_stride = xd->plane[0].dst.width;
   for (int pli = 0; pli < num_planes; pli++) {
     rec_uv[pli] = aom_malloc(sizeof(*rec_uv[pli]) * xd->plane[0].dst.height *
@@ -2810,11 +3213,20 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
     start_timing(cpi, cdef_time);
 #endif
     // Find CDEF parameters
+#if CONFIG_MSCNN
+    av1_cdef_search(&cm->cur_frame->buf, &cm->cur_frame_residue->buf,
+                    cpi->source, cm, xd,
+#if CONFIG_ENTROPY_STATS
+                    &cpi->td,
+#endif  // CONFIG_ENTROPY_STATS
+                    cpi->sf.lpf_sf.cdef_pick_method, cpi->td.mb.rdmult);
+#else
     av1_cdef_search(&cm->cur_frame->buf, cpi->source, cm, xd,
 #if CONFIG_ENTROPY_STATS
                     &cpi->td,
 #endif  // CONFIG_ENTROPY_STATS
                     cpi->sf.lpf_sf.cdef_pick_method, cpi->td.mb.rdmult);
+#endif
 #if CONFIG_CWG_F362
     if (cm->seq_params.single_picture_hdr_flag &&
         !cm->cdef_info.cdef_frame_enable) {
@@ -2823,8 +3235,14 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
 #endif  // CONFIG_CWG_F362
 
     // Apply the filter
-    if (cm->cdef_info.cdef_frame_enable)
+    if (cm->cdef_info.cdef_frame_enable) {
+#if CONFIG_MSCNN
+      av1_cdef_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd,
+                     av1_cdef_init_fb_row);
+#else
       av1_cdef_frame(&cm->cur_frame->buf, cm, xd, av1_cdef_init_fb_row);
+#endif
+    }
 
 #if CONFIG_COLLECT_COMPONENT_TIMING
     end_timing(cpi, cdef_time);
@@ -2841,9 +3259,18 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
       cm->ccso_info.reuse_ccso[plane] = false;
     }
   }
+#if CONFIG_MSCNN
+  nn_loopfilter_frame(cpi, cm, xd);
+#endif
   if (use_ccso) {
+#if CONFIG_MSCNN
+    av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
+                         &cm->cur_frame_residue->buf, 0, 0, 0, num_planes,
+                         NULL);
+#else
     av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 0, 0, 0, num_planes,
                          NULL);
+#endif
     // Reading original and reconstructed chroma samples as input
     for (int pli = 0; pli < num_planes; pli++) {
       const int pic_height = xd->plane[pli].dst.height;
@@ -2885,7 +3312,12 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
       cm->seq_params.enable_ccso = 0;
     }
 #endif  // CONFIG_CWG_F362
+#if CONFIG_MSCNN
+    ccso_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd,
+               ext_rec_y);
+#else
     ccso_frame(&cm->cur_frame->buf, cm, xd, ext_rec_y);
+#endif
     aom_free(ext_rec_y);
   }
   for (int pli = 0; pli < num_planes; pli++) {
@@ -2994,12 +3426,21 @@ static void loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
   cpi->cur_mfh_params.mfh_loop_filter_level[3] = lf->filter_level_v;
 #endif  // CONFIG_MULTI_FRAME_HEADER
   if (lf->filter_level[0] || lf->filter_level[1]) {
+#if CONFIG_MSCNN
+    if (num_workers > 1)
+      av1_loop_filter_frame_mt(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd, 0, num_planes, 0,
+                               mt_info->workers, num_workers,
+                               &mt_info->lf_row_sync);
+    else
+      av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd, 0, num_planes, 0);
+#else
     if (num_workers > 1)
       av1_loop_filter_frame_mt(&cm->cur_frame->buf, cm, xd, 0, num_planes, 0,
                                mt_info->workers, num_workers,
                                &mt_info->lf_row_sync);
     else
       av1_loop_filter_frame(&cm->cur_frame->buf, cm, xd, 0, num_planes, 0);
+#endif
   }
 #if CONFIG_COLLECT_COMPONENT_TIMING
   end_timing(cpi, loop_filter_time);
@@ -3957,12 +4398,28 @@ static int encode_with_recode_loop_and_filter(AV1_COMP *cpi, size_t *size,
   av1_set_lr_tools(master_lr_tools_disable_mask[1], 2, &cm->features);
 
   // Pick the loop filter level for the frame.
+#if CONFIG_MSCNN
+    YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
+    memset(&nn_dblk_input, 0, sizeof(YV12_BUFFER_CONFIG));
+    aom_alloc_frame_buffer(&nn_dblk_input, buffer->y_crop_width,
+                           buffer->y_crop_height, buffer->subsampling_x,
+                           buffer->subsampling_y, buffer->border, 0, false);
+    buffer = NULL;
+    aom_yv12_copy_frame(&cm->cur_frame->buf, &nn_dblk_input, 3);
+#endif
 #if CONFIG_CWG_F317
   if (!cm->bru.frame_inactive_flag && !cm->bridge_frame_info.is_bridge_frame)
     loopfilter_frame(cpi, cm);
 #else
   if (!cm->bru.frame_inactive_flag) loopfilter_frame(cpi, cm);
 #endif  // CONFIG_CWG_F317
+#if CONFIG_MSCNN
+    aom_free_frame_buffer(&nn_dblk_input);
+#endif  
+
+// #if CONFIG_MSCNN // TODOCNN 这段代码还需要吗 放在什么地方
+//     cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+// #endif
   int64_t tip_as_output_sse = INT64_MAX;
   int64_t tip_as_output_rate = INT64_MAX;
 

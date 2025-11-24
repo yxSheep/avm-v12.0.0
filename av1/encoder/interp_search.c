@@ -113,6 +113,16 @@ static INLINE void swap_dst_buf(MACROBLOCKD *xd, const BUFFER_SET *dst_bufs[2],
   restore_dst_buf(xd, *dst_bufs[0], num_planes);
 }
 
+#if CONFIG_MSCNN
+static INLINE void swap_dstResidue_buf(MACROBLOCKD *xd, const BUFFER_SET *dstResidue_bufs[2],
+                                int num_planes) {
+  const BUFFER_SET *buf0 = dstResidue_bufs[0];
+  dstResidue_bufs[0] = dstResidue_bufs[1];
+  dstResidue_bufs[1] = buf0;
+  restore_dstResidue_buf(xd, *dstResidue_bufs[0], num_planes);
+}
+#endif
+
 static INLINE int get_switchable_rate(MACROBLOCK *const x,
                                       const InterpFilter interp_fltr,
                                       const int ctx[2]) {
@@ -160,6 +170,16 @@ static INLINE void interp_model_rd_eval(
 }
 
 // calculate the rdcost of given interpolation_filter
+#if CONFIG_MSCNN
+static INLINE int64_t interpolation_filter_rd(
+    MACROBLOCK *const x, const AV1_COMP *const cpi,
+    const TileDataEnc *tile_data, BLOCK_SIZE bsize,
+    const BUFFER_SET *const orig_dst, const BUFFER_SET *const orig_dstResidue,
+    int64_t *const rd,
+    RD_STATS *rd_stats_luma, RD_STATS *rd_stats, int *const switchable_rate,
+    const BUFFER_SET *dst_bufs[2], const BUFFER_SET *dstResidue_bufs[2], int filter_idx, const int switchable_ctx[2],
+    const int skip_pred) {
+#else
 static INLINE int64_t interpolation_filter_rd(
     MACROBLOCK *const x, const AV1_COMP *const cpi,
     const TileDataEnc *tile_data, BLOCK_SIZE bsize,
@@ -167,6 +187,7 @@ static INLINE int64_t interpolation_filter_rd(
     RD_STATS *rd_stats_luma, RD_STATS *rd_stats, int *const switchable_rate,
     const BUFFER_SET *dst_bufs[2], int filter_idx, const int switchable_ctx[2],
     const int skip_pred) {
+#endif
   const AV1_COMMON *cm = &cpi->common;
   const InterpSearchFlags *interp_search_flags = &cpi->interp_search_flags;
   const int num_planes = av1_num_planes(cm);
@@ -272,6 +293,9 @@ static INLINE int64_t interpolation_filter_rd(
         x->recalc_luma_mc_data ^= 1;
       }
       swap_dst_buf(xd, dst_bufs, num_planes);
+#if CONFIG_MSCNN
+      swap_dstResidue_buf(xd, dstResidue_bufs, num_planes);
+#endif
     }
     return 1;
   }
@@ -280,18 +304,36 @@ static INLINE int64_t interpolation_filter_rd(
 }
 
 // Find the best interp filter if dual_interp_filter = 0
+#if CONFIG_MSCNN
 static INLINE void find_best_non_dual_interp_filter(
     MACROBLOCK *const x, const AV1_COMP *const cpi,
     const TileDataEnc *tile_data, BLOCK_SIZE bsize,
-    const BUFFER_SET *const orig_dst, int64_t *const rd, RD_STATS *rd_stats_y,
+    const BUFFER_SET *const orig_dst, const BUFFER_SET *const orig_dstResidue,
+    int64_t *const rd, RD_STATS *rd_stats_y,
+    RD_STATS *rd_stats, int *const switchable_rate,
+    const BUFFER_SET *dst_bufs[2], const BUFFER_SET *dstResidue_bufs[2], const int switchable_ctx[2],
+    const int skip_ver, const int skip_hor) {
+#else
+static INLINE void find_best_non_dual_interp_filter(
+    MACROBLOCK *const x, const AV1_COMP *const cpi,
+    const TileDataEnc *tile_data, BLOCK_SIZE bsize,
+    const BUFFER_SET *const orig_dst, 
+    int64_t *const rd, RD_STATS *rd_stats_y,
     RD_STATS *rd_stats, int *const switchable_rate,
     const BUFFER_SET *dst_bufs[2], const int switchable_ctx[2],
     const int skip_ver, const int skip_hor) {
+#endif
   const int skip_pred = (skip_hor & skip_ver);
   for (int i = EIGHTTAP_REGULAR + 1; i < SWITCHABLE_FILTERS; ++i) {
+#if CONFIG_MSCNN
+    interpolation_filter_rd(x, cpi, tile_data, bsize, orig_dst, orig_dstResidue, rd, rd_stats_y,
+                            rd_stats, switchable_rate, dst_bufs, dstResidue_bufs, i,
+                            switchable_ctx, skip_pred);
+#else
     interpolation_filter_rd(x, cpi, tile_data, bsize, orig_dst, rd, rd_stats_y,
                             rd_stats, switchable_rate, dst_bufs, i,
                             switchable_ctx, skip_pred);
+#endif    
   }
 }
 
@@ -383,12 +425,22 @@ static INLINE void calc_interp_skip_pred_flag(MACROBLOCK *const x,
  * current motion mode being tested should be skipped. It returns 0 if the
  * parameter search is a success.
  */
+#if CONFIG_MSCNN
+int64_t av1_interpolation_filter_search(
+    MACROBLOCK *const x, const AV1_COMP *const cpi,
+    const TileDataEnc *tile_data, BLOCK_SIZE bsize,
+    const BUFFER_SET *const tmp_dst, const BUFFER_SET *const tmp_dstResidue,
+    const BUFFER_SET *const orig_dst, const BUFFER_SET *const orig_dstResidue,
+    int64_t *const rd, int *const switchable_rate, int *skip_build_pred,
+    HandleInterModeArgs *args, int64_t ref_best_rd) {
+#else
 int64_t av1_interpolation_filter_search(
     MACROBLOCK *const x, const AV1_COMP *const cpi,
     const TileDataEnc *tile_data, BLOCK_SIZE bsize,
     const BUFFER_SET *const tmp_dst, const BUFFER_SET *const orig_dst,
     int64_t *const rd, int *const switchable_rate, int *skip_build_pred,
     HandleInterModeArgs *args, int64_t ref_best_rd) {
+#endif
   const AV1_COMMON *cm = &cpi->common;
   const InterpSearchFlags *interp_search_flags = &cpi->interp_search_flags;
   const int num_planes = av1_num_planes(cm);
@@ -493,11 +545,30 @@ int64_t av1_interpolation_filter_search(
 
   // do interp_filter search
   restore_dst_buf(xd, *tmp_dst, num_planes);
+#if CONFIG_MSCNN
+  restore_dstResidue_buf(xd, *tmp_dstResidue, num_planes);
+#endif
+
   const BUFFER_SET *dst_bufs[2] = { tmp_dst, orig_dst };
-  find_best_non_dual_interp_filter(
+#if CONFIG_MSCNN
+  const BUFFER_SET *dstResidue_bufs[2] = { tmp_dstResidue, orig_dstResidue };
+#endif
+
+#if CONFIG_MSCNN
+find_best_non_dual_interp_filter(
+      x, cpi, tile_data, bsize, orig_dst, orig_dstResidue, rd, &rd_stats_luma, &rd_stats,
+      switchable_rate, dst_bufs, dstResidue_bufs, switchable_ctx, skip_ver, skip_hor);
+  swap_dst_buf(xd, dst_bufs, num_planes);
+#else
+ find_best_non_dual_interp_filter(
       x, cpi, tile_data, bsize, orig_dst, rd, &rd_stats_luma, &rd_stats,
       switchable_rate, dst_bufs, switchable_ctx, skip_ver, skip_hor);
   swap_dst_buf(xd, dst_bufs, num_planes);
+#endif
+
+#if CONFIG_MSCNN
+  swap_dstResidue_buf(xd, dstResidue_bufs, num_planes);
+#endif
   // Recompute final MC data if required
   if (x->recalc_luma_mc_data == 1) {
     // Recomputing final luma MC data is required only if the same was skipped

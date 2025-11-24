@@ -141,15 +141,29 @@ void av1_loop_filter_dealloc(AV1LfSync *lf_sync) {
   }
 }
 
+#if CONFIG_MSCNN
+static void loop_filter_data_reset(LFWorkerData *lf_data,
+                                   YV12_BUFFER_CONFIG *frame_buffer,
+                                   YV12_BUFFER_CONFIG *residue_buffer,
+                                   struct AV1Common *cm, MACROBLOCKD *xd) {
+#else
 static void loop_filter_data_reset(LFWorkerData *lf_data,
                                    YV12_BUFFER_CONFIG *frame_buffer,
                                    struct AV1Common *cm, MACROBLOCKD *xd) {
+#endif
   struct macroblockd_plane *pd = xd->plane;
   lf_data->frame_buffer = frame_buffer;
+#if CONFIG_MSCNN
+  lf_data->residue_buffer = residue_buffer;
+#endif
   lf_data->cm = cm;
   lf_data->xd = xd;
   for (int i = 0; i < MAX_MB_PLANE; i++) {
     memcpy(&lf_data->planes[i].dst, &pd[i].dst, sizeof(lf_data->planes[i].dst));
+#if CONFIG_MSCNN
+    memcpy(&lf_data->planes[i].dstResidue, &pd[i].dstResidue,
+           sizeof(lf_data->planes[i].dstResidue));
+#endif
     lf_data->planes[i].subsampling_x = pd[i].subsampling_x;
     lf_data->planes[i].subsampling_y = pd[i].subsampling_y;
   }
@@ -311,10 +325,18 @@ static AV1LfMTInfo *get_lf_job_info(AV1LfSync *lf_sync) {
 }
 
 // Implement row loopfiltering for each thread.
+#if CONFIG_MSCNN
+static INLINE void thread_loop_filter_rows(
+    const YV12_BUFFER_CONFIG *const frame_buffer,
+    const YV12_BUFFER_CONFIG *const residue_buffer, AV1_COMMON *const cm,
+    struct macroblockd_plane *planes, MACROBLOCKD *xd,
+    AV1LfSync *const lf_sync) {
+#else
 static INLINE void thread_loop_filter_rows(
     const YV12_BUFFER_CONFIG *const frame_buffer, AV1_COMMON *const cm,
     struct macroblockd_plane *planes, MACROBLOCKD *xd,
     AV1LfSync *const lf_sync) {
+#endif
   const int mib_size = cm->mib_size;
   const int mib_size_log2 = cm->mib_size_log2;
   const int sb_cols =
@@ -334,10 +356,13 @@ static INLINE void thread_loop_filter_rows(
       if (dir == 0) {
         for (mi_col = 0; mi_col < cm->mi_params.mi_cols; mi_col += mib_size) {
           c = mi_col >> mib_size_log2;
-
+#if CONFIG_MSCNN
+          av1_setup_dst_planes(planes, frame_buffer, residue_buffer, mi_row,
+                               mi_col, plane, plane + 1, NULL);
+#else
           av1_setup_dst_planes(planes, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-
+#endif
           av1_filter_block_plane_vert(cm, xd, plane, &planes[plane], mi_row,
                                       mi_col);
           sync_write(lf_sync, r, c, sb_cols, plane);
@@ -353,9 +378,13 @@ static INLINE void thread_loop_filter_rows(
           // Wait for vertical edge filtering of the right block to be
           // completed
           sync_read(lf_sync, r + 1, c, plane);
-
+#if CONFIG_MSCNN
+          av1_setup_dst_planes(planes, frame_buffer, residue_buffer, mi_row,
+                               mi_col, plane, plane + 1, NULL);
+#else
           av1_setup_dst_planes(planes, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
+#endif
           av1_filter_block_plane_horz(cm, xd, plane, &planes[plane], mi_row,
                                       mi_col);
         }
@@ -370,16 +399,30 @@ static INLINE void thread_loop_filter_rows(
 static int loop_filter_row_worker(void *arg1, void *arg2) {
   AV1LfSync *const lf_sync = (AV1LfSync *)arg1;
   LFWorkerData *const lf_data = (LFWorkerData *)arg2;
+#if CONFIG_MSCNN
+  thread_loop_filter_rows(lf_data->frame_buffer, lf_data->residue_buffer,
+                          lf_data->cm, lf_data->planes, lf_data->xd, lf_sync);
+#else
   thread_loop_filter_rows(lf_data->frame_buffer, lf_data->cm, lf_data->planes,
                           lf_data->xd, lf_sync);
+#endif
   return 1;
 }
 
+#if CONFIG_MSCNN
+static void loop_filter_rows_mt(YV12_BUFFER_CONFIG *frame,
+                                YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm,
+                                MACROBLOCKD *xd, int start, int stop,
+                                int plane_start, int plane_end,
+                                AVxWorker *workers, int nworkers,
+                                AV1LfSync *lf_sync) {
+#else
 static void loop_filter_rows_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
                                 MACROBLOCKD *xd, int start, int stop,
                                 int plane_start, int plane_end,
                                 AVxWorker *workers, int nworkers,
                                 AV1LfSync *lf_sync) {
+#endif
   const AVxWorkerInterface *const winterface = aom_get_worker_interface();
   const int mib_size = cm->mib_size;
   const int mib_size_log2 = cm->mib_size_log2;
@@ -413,7 +456,11 @@ static void loop_filter_rows_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
     worker->data2 = lf_data;
 
     // Loopfilter data
+#if CONFIG_MSCNN
+    loop_filter_data_reset(lf_data, frame, residue, cm, xd);
+#else
     loop_filter_data_reset(lf_data, frame, cm, xd);
+#endif
 
     // Start loopfiltering
     if (i == num_workers - 1) {
@@ -429,10 +476,18 @@ static void loop_filter_rows_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
   }
 }
 
+#if CONFIG_MSCNN
+void av1_loop_filter_frame_mt(YV12_BUFFER_CONFIG *frame,
+                              YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm,
+                              MACROBLOCKD *xd, int plane_start, int plane_end,
+                              int partial_frame, AVxWorker *workers,
+                              int num_workers, AV1LfSync *lf_sync) {
+#else
 void av1_loop_filter_frame_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
                               MACROBLOCKD *xd, int plane_start, int plane_end,
                               int partial_frame, AVxWorker *workers,
                               int num_workers, AV1LfSync *lf_sync) {
+#endif
 #if CONFIG_CWG_F317
   if (cm->bridge_frame_info.is_bridge_frame) {
     return;
@@ -451,8 +506,13 @@ void av1_loop_filter_frame_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
   end_mi_row = start_mi_row + mi_rows_to_filter;
   av1_loop_filter_frame_init(cm, plane_start, plane_end);
 
+#if CONFIG_MSCNN
+  loop_filter_rows_mt(frame, residue, cm, xd, start_mi_row, end_mi_row,
+                      plane_start, plane_end, workers, num_workers, lf_sync);
+#else
   loop_filter_rows_mt(frame, cm, xd, start_mi_row, end_mi_row, plane_start,
                       plane_end, workers, num_workers, lf_sync);
+#endif
 }
 
 // Initialize ccso worker data
@@ -699,8 +759,11 @@ void av1_ccso_frame_mt(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
                        MACROBLOCKD *xd, AVxWorker *workers, int num_workers,
                        uint16_t *ext_rec_y, AV1CcsoSync *ccso_sync) {
   const int num_planes = av1_num_planes(cm);
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, frame, &cm->cur_frame_residue->buf, 0, 0, 0, num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, frame, 0, 0, 0, num_planes, NULL);
-
+#endif
   apply_ccso_filter_mt(workers, num_workers, cm, xd, ext_rec_y, ccso_sync);
 }
 
@@ -1337,10 +1400,13 @@ void av1_cdef_frame_mt(AV1_COMMON *const cm, MACROBLOCKD *const xd,
                        int num_workers,
                        cdef_init_fb_row_t cdef_init_fb_row_fn) {
   YV12_BUFFER_CONFIG *frame = &cm->cur_frame->buf;
+
   const int num_planes = av1_num_planes(cm);
-
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, frame, &cm->cur_frame_residue->buf, 0, 0, 0, num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, frame, 0, 0, 0, num_planes, NULL);
-
+#endif
   reset_cdef_job_info(cdef_sync);
   prepare_cdef_frame_workers(cm, xd, cdef_worker, cdef_sb_row_worker_hook,
                              workers, cdef_sync, num_workers,

@@ -592,9 +592,16 @@ struct aom_codec_alg_priv {
   unsigned int fixed_kf_cntr;
   // BufferPool that holds all reference frames.
   BufferPool *buffer_pool;
+#if CONFIG_MSCNN
+  BufferPool *buffer_pool_residue;
+#endif
 
   // lookahead instance variables
   BufferPool *buffer_pool_lap;
+#if CONFIG_MSCNN
+  BufferPool *buffer_pool_lap_residue;
+#endif
+
   AV1_COMP *cpi_lap;
   FIRSTPASS_STATS *frame_stats_buffer;
   // Number of stats buffers required for look ahead
@@ -2759,6 +2766,44 @@ static aom_codec_err_t create_stats_buffer(FIRSTPASS_STATS **frame_stats_buffer,
   return res;
 }
 
+#if CONFIG_MSCNN
+static aom_codec_err_t create_context_and_bufferpool(
+    AV1_COMP **p_cpi, BufferPool **p_buffer_pool,
+    BufferPool **p_buffer_pool_residue, AV1EncoderConfig *oxcf,
+    struct aom_codec_pkt_list *pkt_list_head, FIRSTPASS_STATS *frame_stats_buf,
+    COMPRESSOR_STAGE stage, int num_lap_buffers, int lap_lag_in_frames,
+    STATS_BUFFER_CTX *stats_buf_context) {
+  aom_codec_err_t res = AOM_CODEC_OK;
+
+  *p_buffer_pool = (BufferPool *)aom_calloc(1, sizeof(BufferPool));
+  if (*p_buffer_pool == NULL) return AOM_CODEC_MEM_ERROR;
+
+#if CONFIG_MULTITHREAD
+  if (pthread_mutex_init(&((*p_buffer_pool)->pool_mutex), NULL)) {
+    return AOM_CODEC_MEM_ERROR;
+  }
+#endif
+
+  *p_buffer_pool_residue = (BufferPool *)aom_calloc(1, sizeof(BufferPool));
+  if (*p_buffer_pool_residue == NULL) return AOM_CODEC_MEM_ERROR;
+
+#if CONFIG_MULTITHREAD
+  if (pthread_mutex_init(&((*p_buffer_pool_residue)->pool_mutex), NULL)) {
+    return AOM_CODEC_MEM_ERROR;
+  }
+#endif
+
+  *p_cpi = av1_create_compressor(oxcf, *p_buffer_pool, *p_buffer_pool_residue,
+                                 frame_stats_buf, stage, num_lap_buffers,
+                                 lap_lag_in_frames, stats_buf_context);
+  if (*p_cpi == NULL)
+    res = AOM_CODEC_MEM_ERROR;
+  else
+    (*p_cpi)->output_pkt_list = pkt_list_head;
+
+  return res;
+}
+#else
 static aom_codec_err_t create_context_and_bufferpool(
     AV1_COMP **p_cpi, BufferPool **p_buffer_pool, AV1EncoderConfig *oxcf,
     struct aom_codec_pkt_list *pkt_list_head, FIRSTPASS_STATS *frame_stats_buf,
@@ -2784,6 +2829,7 @@ static aom_codec_err_t create_context_and_bufferpool(
 
   return res;
 }
+#endif
 
 static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
   aom_codec_err_t res = AOM_CODEC_OK;
@@ -2832,6 +2878,22 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
                                 &priv->stats_buf_context, *num_lap_buffers);
       if (res != AOM_CODEC_OK) return AOM_CODEC_MEM_ERROR;
 
+#if CONFIG_MSCNN
+      res = create_context_and_bufferpool(
+          &priv->cpi, &priv->buffer_pool, &priv->buffer_pool_residue,
+          &priv->oxcf, &priv->pkt_list.head, priv->frame_stats_buffer,
+          ENCODE_STAGE, *num_lap_buffers, -1, &priv->stats_buf_context);
+
+      // Create another compressor if look ahead is enabled
+      if (res == AOM_CODEC_OK && *num_lap_buffers) {
+        res = create_context_and_bufferpool(
+            &priv->cpi_lap, &priv->buffer_pool_lap,
+            &priv->buffer_pool_lap_residue, &priv->oxcf, NULL,
+            priv->frame_stats_buffer, LAP_STAGE, *num_lap_buffers,
+            clamp(lap_lag_in_frames, 0, MAX_LAG_BUFFERS),
+            &priv->stats_buf_context);
+      }
+#else
       res = create_context_and_bufferpool(
           &priv->cpi, &priv->buffer_pool, &priv->oxcf, &priv->pkt_list.head,
           priv->frame_stats_buffer, ENCODE_STAGE, *num_lap_buffers, -1,
@@ -2845,6 +2907,7 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
             clamp(lap_lag_in_frames, 0, MAX_LAG_BUFFERS),
             &priv->stats_buf_context);
       }
+#endif
       init_ibp_info(priv->cpi->common.ibp_directional_weights);
     }
   }
@@ -2852,6 +2915,22 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
   return res;
 }
 
+#if CONFIG_MSCNN
+static void destroy_context_and_bufferpool(AV1_COMP *cpi,
+                                           BufferPool *buffer_pool,
+                                           BufferPool *buffer_pool_residue) {
+  av1_remove_compressor(cpi);
+#if CONFIG_MULTITHREAD
+  if (buffer_pool) pthread_mutex_destroy(&buffer_pool->pool_mutex);
+#endif
+  aom_free(buffer_pool);
+#if CONFIG_MSCNN
+  if (buffer_pool_residue)
+    pthread_mutex_destroy(&buffer_pool_residue->pool_mutex);
+#endif
+  aom_free(buffer_pool_residue);
+}
+#else
 static void destroy_context_and_bufferpool(AV1_COMP *cpi,
                                            BufferPool *buffer_pool) {
   av1_remove_compressor(cpi);
@@ -2860,6 +2939,7 @@ static void destroy_context_and_bufferpool(AV1_COMP *cpi,
 #endif
   aom_free(buffer_pool);
 }
+#endif
 
 static void destroy_stats_buffer(STATS_BUFFER_CTX *stats_buf_context,
                                  FIRSTPASS_STATS *frame_stats_buffer) {
@@ -2870,13 +2950,23 @@ static void destroy_stats_buffer(STATS_BUFFER_CTX *stats_buf_context,
 
 static aom_codec_err_t encoder_destroy(aom_codec_alg_priv_t *ctx) {
   free(ctx->cx_data);
+#if CONFIG_MSCNN
+  destroy_context_and_bufferpool(ctx->cpi, ctx->buffer_pool,
+                                 ctx->buffer_pool_residue);
+#else
   destroy_context_and_bufferpool(ctx->cpi, ctx->buffer_pool);
+#endif
   if (ctx->cpi_lap) {
     // As both cpi and cpi_lap have the same lookahead_ctx, it is already freed
     // when destroy is called on cpi. Thus, setting lookahead_ctx to null here,
     // so that it doesn't attempt to free it again.
     ctx->cpi_lap->lookahead = NULL;
+#if CONFIG_MSCNN
+    destroy_context_and_bufferpool(ctx->cpi_lap, ctx->buffer_pool_lap,
+                                   ctx->buffer_pool_lap_residue);
+#else
     destroy_context_and_bufferpool(ctx->cpi_lap, ctx->buffer_pool_lap);
+#endif
   }
   destroy_stats_buffer(&ctx->stats_buf_context, ctx->frame_stats_buffer);
   aom_free(ctx);

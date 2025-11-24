@@ -3303,6 +3303,17 @@ static AOM_INLINE void write_modes(AV1_COMP *const cpi,
     }
   }
 
+#if CONFIG_MSCNN
+  if(cm->nn_loopfilter_info.nn_loopfilter_enable && cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable && tile_row==0 && tile_col==0) {
+    // TODO: Disable access across tile boundary
+    for (int i = 0; i < cm->nn_loopfilter_info.flag_count; i++) {
+      uint8_t top_ctx  = ( (i - cm->nn_loopfilter_info.stride) < 0 )  ? 0 : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - cm->nn_loopfilter_info.stride)];
+      uint8_t left_ctx = ( (i % cm->nn_loopfilter_info.stride) == 0 ) ? 0 : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - 1)];
+      aom_write_symbol(w, cm->nn_loopfilter_info.nn_loopfilter_flags[i], xd->tile_ctx->nn_cdf[left_ctx][top_ctx], 2);
+    }
+  }
+#endif
+
   for (int mi_row = mi_row_start; mi_row < mi_row_end; mi_row += cm->mib_size) {
     const int sb_row_in_tile =
         (mi_row - tile->mi_row_start) >> cm->mib_size_log2;
@@ -4236,6 +4247,30 @@ static AOM_INLINE void encode_cdef(const AV1_COMMON *cm,
     }
   }
 }
+
+#if CONFIG_MSCNN
+static AOM_INLINE void encode_nn_loopfilter( const AV1_COMMON *cm, struct aom_write_bit_buffer *wb ){
+  aom_wb_write_literal(wb, cm->nn_loopfilter_info.nn_loopfilter_enable, 1);
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
+    aom_wb_write_literal(wb, cm->nn_loopfilter_info.model_idx, MODEL_BITS);
+    if (cm->nn_loopfilter_info.rs_idx == 0) {
+      aom_wb_write_literal(wb, 1, 1);
+    } else if (cm->nn_loopfilter_info.rs_idx == 1) {
+      aom_wb_write_literal(wb, 0, 1);
+      aom_wb_write_literal(wb, 1, 1);
+    } else { // 2
+      assert(cm->nn_loopfilter_info.rs_idx == 2);
+      aom_wb_write_literal(wb, 0, 1);
+      aom_wb_write_literal(wb, 0, 1);
+    }
+    aom_wb_write_literal(wb, cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable, 1);
+    if (cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable) {
+      assert((int) (ceil(cm->cur_frame->buf.y_height / (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx]) * ceil(cm->cur_frame->buf.y_width / (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx])) == cm->nn_loopfilter_info.flag_count);
+      aom_wb_write_literal(wb, cm->nn_loopfilter_info.blk_size_idx, 2);
+    }
+  }
+}
+#endif
 
 // write CCSO offset idx using truncated unary coding
 static AOM_INLINE void write_ccso_offset_idx(struct aom_write_bit_buffer *wb,
@@ -7084,6 +7119,9 @@ static AOM_INLINE void write_uncompressed_header_obu
 
       encode_cdef(cm, wb);
     }
+#if CONFIG_MSCNN
+    encode_nn_loopfilter(cm, wb);
+#endif
     encode_restoration_mode(cm, wb);
     if (!features->coded_lossless && cm->seq_params.enable_ccso) {
       encode_ccso(cm, wb);

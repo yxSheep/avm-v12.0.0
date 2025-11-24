@@ -276,6 +276,9 @@ void av1_reset_cdf_symbol_counters(FRAME_CONTEXT *fc) {
   RESET_CDF_COUNTER(fc->wienerns_uv_sym_cdf, 2);
   RESET_CDF_COUNTER(fc->wienerns_4part_cdf, 4);
   RESET_CDF_COUNTER(fc->pc_wiener_restore_cdf, 2);
+#if CONFIG_MSCNN
+  RESET_CDF_COUNTER(fc->nn_cdf, 2);
+#endif
   RESET_CDF_COUNTER(fc->y_mode_set_cdf, INTRA_MODE_SETS);
   RESET_CDF_COUNTER(fc->y_mode_idx_cdf, LUMA_INTRA_MODE_INDEX_COUNT);
   RESET_CDF_COUNTER(fc->y_mode_idx_offset_cdf, LUMA_INTRA_MODE_OFFSET_COUNT);

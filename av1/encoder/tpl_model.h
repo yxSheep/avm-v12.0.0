@@ -102,6 +102,9 @@ typedef struct TplDepFrame {
   TplDepStats *tpl_stats_ptr;
   const YV12_BUFFER_CONFIG *gf_picture;
   YV12_BUFFER_CONFIG *rec_picture;
+#if CONFIG_MSCNN
+  YV12_BUFFER_CONFIG *residue_picture;
+#endif  
   int ref_map_index[REF_FRAMES];
   int stride;
   int width;
@@ -146,7 +149,9 @@ typedef struct TplParams {
    * tpl_rec_pool[i] stores the reconstructed frame of ith frame in a gf group.
    */
   YV12_BUFFER_CONFIG tpl_rec_pool[MAX_LAG_BUFFERS];
-
+#if CONFIG_MSCNN
+  YV12_BUFFER_CONFIG tpl_residue_pool[MAX_LAG_BUFFERS];
+#endif
   /*!
    * Pointer to tpl_stats_buffer.
    */
@@ -175,7 +180,9 @@ typedef struct TplParams {
    * reference frame type.
    */
   const YV12_BUFFER_CONFIG *ref_frame[INTER_REFS_PER_FRAME];
-
+#if CONFIG_MSCNN
+  const YV12_BUFFER_CONFIG *residue_frame;
+#endif
   /*!
    * Parameters related to synchronization for top-right dependency in row based
    * multi-threading of tpl

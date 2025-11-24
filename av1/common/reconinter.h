@@ -1030,6 +1030,44 @@ static INLINE int64_t scaled_buffer_offset(int x_offset, int y_offset,
   return (int64_t)y * stride + x;
 }
 
+#if CONFIG_MSCNN
+static INLINE void setup_dst_planes(struct buf_2d *dst, uint16_t *src,
+                                    int width, int height, int crop_width,
+                                    int crop_height, int stride,
+                                    struct buf_2d *dstResidue, uint16_t *residue,
+                                    int widthResidue, int heightResidue,
+                                    int crop_widthResidue, int crop_heightResidue,  
+                                    int strideResidue, int mi_row, int mi_col,
+                                    const struct scale_factors *scale,
+                                    int subsampling_x, int subsampling_y,
+                                    const CHROMA_REF_INFO *chroma_ref_info) {
+  // Offset the buffer pointer
+  if (chroma_ref_info && (subsampling_x || subsampling_y)) {
+    mi_row = chroma_ref_info->mi_row_chroma_base;
+    mi_col = chroma_ref_info->mi_col_chroma_base;
+  }
+
+  const int x = (MI_SIZE * mi_col) >> subsampling_x;
+  const int y = (MI_SIZE * mi_row) >> subsampling_y;
+  dst->buf = src + scaled_buffer_offset(x, y, stride, scale);
+  dst->buf0 = src;
+  dst->width = width;
+  dst->height = height;
+  dst->crop_width = crop_width;
+  dst->crop_height = crop_height;
+  dst->stride = stride;
+
+  assert(dstResidue!=NULL);
+  dstResidue->buf = residue + scaled_buffer_offset(x, y, strideResidue, scale);
+  dstResidue->buf0 = residue;
+  dstResidue->width = widthResidue;
+  dstResidue->height = heightResidue;
+  dstResidue->crop_width = crop_widthResidue;
+  dstResidue->crop_height = crop_heightResidue;
+  dstResidue->stride = strideResidue;
+}
+#endif
+
 static INLINE void setup_pred_plane(struct buf_2d *dst, uint16_t *src,
                                     int width, int height, int crop_width,
                                     int crop_height, int stride, int mi_row,
@@ -1054,10 +1092,18 @@ static INLINE void setup_pred_plane(struct buf_2d *dst, uint16_t *src,
   dst->stride = stride;
 }
 
+#if CONFIG_MSCNN
+void av1_setup_dst_planes(struct macroblockd_plane *planes,
+                          const YV12_BUFFER_CONFIG *src, 
+                          const YV12_BUFFER_CONFIG *residue, int mi_row, int mi_col,
+                          const int plane_start, const int plane_end,
+                          const CHROMA_REF_INFO *chroma_ref_info);
+#else
 void av1_setup_dst_planes(struct macroblockd_plane *planes,
                           const YV12_BUFFER_CONFIG *src, int mi_row, int mi_col,
                           const int plane_start, const int plane_end,
                           const CHROMA_REF_INFO *chroma_ref_info);
+#endif
 
 void av1_setup_pre_planes(MACROBLOCKD *xd, int idx,
                           const YV12_BUFFER_CONFIG *src, int mi_row, int mi_col,

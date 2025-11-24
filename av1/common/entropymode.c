@@ -1814,6 +1814,13 @@ static const aom_cdf_prob default_pc_wiener_restore_cdf[CDF_SIZE(2)] = {
   AOM_CDF2(14330), 8
 };
 
+#if CONFIG_MSCNN
+static const aom_cdf_prob default_nn_cdf[2][2][CDF_SIZE(2)] = {
+  { { AOM_CDF2(8192) }, { AOM_CDF2(16384) } },
+  { { AOM_CDF2(16384) }, { AOM_CDF2(24576) } }
+};
+#endif
+
 static const aom_cdf_prob default_delta_q_cdf[CDF_SIZE(DELTA_Q_PROBS + 1)] = {
   AOM_CDF8(16594, 23325, 26424, 28225, 29358, 30099, 30613), 56
 };
@@ -2125,6 +2132,9 @@ static void init_mode_probs(FRAME_CONTEXT *fc,
   av1_copy(fc->wienerns_uv_sym_cdf, default_wienerns_uv_sym_cdf);
   av1_copy(fc->wienerns_4part_cdf, default_wienerns_4part_cdf);
   av1_copy(fc->pc_wiener_restore_cdf, default_pc_wiener_restore_cdf);
+#if CONFIG_MSCNN
+  av1_copy(fc->nn_cdf, default_nn_cdf);
+#endif
   av1_copy(fc->y_mode_set_cdf, default_y_mode_set_cdf);
   av1_copy(fc->y_mode_idx_cdf, default_y_mode_idx_cdf);
   av1_copy(fc->y_mode_idx_offset_cdf, default_y_mode_idx_offset_cdf);
@@ -3120,6 +3130,9 @@ void av1_avg_cdf_symbols(FRAME_CONTEXT *ctx_left, FRAME_CONTEXT *ctx_tr,
     AVG_CDF_STRIDE(ctx_left->cdef_cdf[j], ctx_tr->cdef_cdf[j], j + 2,
                    CDF_SIZE(CDEF_STRENGTHS_NUM));
   }
+#if CONFIG_MSCNN
+  AVERAGE_CDF(ctx_left->nn_cdf, ctx_tr->nn_cdf, 2);
+#endif
   AVERAGE_CDF(ctx_left->gdf_cdf, ctx_tr->gdf_cdf, 2);
   AVERAGE_CDF(ctx_left->wienerns_restore_cdf, ctx_tr->wienerns_restore_cdf, 2);
   AVERAGE_CDF(ctx_left->wienerns_length_cdf, ctx_tr->wienerns_length_cdf, 2);
@@ -3226,6 +3239,9 @@ void av1_setup_frame_contexts(AV1_COMMON *cm) {
   // default probs, either by av1_setup_past_independence or after manually
   // initializing them
   *cm->default_frame_context = *cm->fc;
+#if CONFIG_MSCNN // TODOCNN 还有其他地方需要初始化吗
+  cm->buffer_pool_residue->frame_bufs[0].frame_context = *cm->fc;  // only 1 frame in residue pool 
+#endif
 }
 
 void av1_setup_past_independence(AV1_COMMON *cm) {

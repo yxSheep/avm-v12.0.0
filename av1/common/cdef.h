@@ -146,8 +146,14 @@ static INLINE int fetch_cdef_mi_grid_index(const AV1_COMMON *const cm,
  *
  * Nothing is returned. Instead, the filtered frame is output in \c frame.
  */
+#if CONFIG_MSCNN
+void av1_cdef_frame(YV12_BUFFER_CONFIG *frame, YV12_BUFFER_CONFIG *residue,
+                    AV1_COMMON *cm, MACROBLOCKD *xd,
+                    cdef_init_fb_row_t cdef_init_fb_row_fn);
+#else
 void av1_cdef_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm, MACROBLOCKD *xd,
                     cdef_init_fb_row_t cdef_init_fb_row_fn);
+#endif
 
 /*!\brief Apply CDEF filtering for one row of 64x64 filter blocks
  *

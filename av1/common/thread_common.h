@@ -203,11 +203,21 @@ void av1_free_cdef_sync(AV1CdefSync *cdef_sync);
 // Deallocate loopfilter synchronization related mutex and data.
 void av1_loop_filter_dealloc(AV1LfSync *lf_sync);
 
+#if CONFIG_MSCNN
+void av1_loop_filter_frame_mt(YV12_BUFFER_CONFIG *frame, 
+                              YV12_BUFFER_CONFIG *residue, struct AV1Common *cm,
+                              struct macroblockd *xd, int plane_start,
+                              int plane_end, int partial_frame,
+                              AVxWorker *workers, int num_workers,
+                              AV1LfSync *lf_sync);
+#else
 void av1_loop_filter_frame_mt(YV12_BUFFER_CONFIG *frame, struct AV1Common *cm,
                               struct macroblockd *xd, int plane_start,
                               int plane_end, int partial_frame,
                               AVxWorker *workers, int num_workers,
                               AV1LfSync *lf_sync);
+#endif
+
 void av1_loop_restoration_filter_frame_mt(YV12_BUFFER_CONFIG *frame,
                                           struct AV1Common *cm,
                                           int optimized_lr, AVxWorker *workers,

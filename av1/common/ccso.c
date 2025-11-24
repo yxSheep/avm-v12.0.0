@@ -634,10 +634,22 @@ void apply_ccso_filter(AV1_COMMON *cm, MACROBLOCKD *xd, int plane,
 }
 
 /* Apply CCSO for one frame */
+#if CONFIG_MSCNN
+void ccso_frame(YV12_BUFFER_CONFIG *frame, 
+                YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm,
+                MACROBLOCKD *xd,
+                uint16_t *ext_rec_y) {
+#else
 void ccso_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm, MACROBLOCKD *xd,
                 uint16_t *ext_rec_y) {
+#endif
+#if CONFIG_MSCNN
+  const int num_planes = av1_num_planes(cm);
+  av1_setup_dst_planes(xd->plane, frame, residue, 0, 0, 0, num_planes, NULL);
+#else
   const int num_planes = av1_num_planes(cm);
   av1_setup_dst_planes(xd->plane, frame, 0, 0, 0, num_planes, NULL);
+#endif
 
   for (int plane = 0; plane < num_planes; plane++) {
     const int dst_stride = xd->plane[plane].dst.stride;

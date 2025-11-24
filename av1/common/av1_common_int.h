@@ -236,6 +236,19 @@ typedef struct FrameHash {
   int is_present;
 } FrameHash;
 
+#if CONFIG_MSCNN
+typedef struct {
+  bool nn_loopfilter_enable;
+  uint8_t nn_loopfilter_blk_control_enable;
+  int blk_size_idx;
+  int flag_count;
+  int stride;  
+  uint8_t nn_loopfilter_flags[125000];
+  int rs_idx; // residual scaling index
+  int model_idx;
+} NnlfInfo;
+#endif
+
 /** ccso info */
 typedef struct {
   bool reuse_ccso[CCSO_NUM_COMPONENTS];
@@ -2099,6 +2112,10 @@ typedef struct AV1Common {
    */
   RefCntBuffer *cur_frame;
 
+#if CONFIG_MSCNN
+  RefCntBuffer *cur_frame_residue;
+#endif
+
   /*!
    * An alternative to remapped_ref_idx (above) which contains a mapping to
    * ref_frame_map[] according to a "usefulness" score. It also contains all
@@ -2246,6 +2263,10 @@ typedef struct AV1Common {
    */
   CdefInfo cdef_info;
 
+#if CONFIG_MSCNN
+  NnlfInfo nn_loopfilter_info;
+#endif
+
   /**
    * \name Frame filter prediction dictionary related parameters.
    */
@@ -2361,6 +2382,10 @@ typedef struct AV1Common {
    * External BufferPool passed from outside.
    */
   BufferPool *buffer_pool;
+
+#if CONFIG_MSCNN
+  BufferPool *buffer_pool_residue;
+#endif
 
   /*!
    * Above context buffers and their sizes.
@@ -2704,6 +2729,25 @@ static INLINE YV12_BUFFER_CONFIG *get_ref_frame(AV1_COMMON *cm, int index) {
   return &cm->ref_frame_map[index]->buf;
 }
 
+#if CONFIG_MSCNN
+static INLINE int get_fb_residue(AV1_COMMON *cm) {
+  RefCntBuffer *const frame_bufs = cm->buffer_pool_residue->frame_bufs;
+  lock_buffer_pool(cm->buffer_pool_residue);
+  if (frame_bufs[0].buf.use_external_reference_buffers) {
+      // If this frame buffer's y_buffer, u_buffer, and v_buffer point to the
+      // external reference buffers. Restore the buffer pointers to point to the
+      // internally allocated memory.
+      YV12_BUFFER_CONFIG *ybf = &frame_bufs[0].buf;
+      ybf->y_buffer = ybf->store_buf_adr[0];
+      ybf->u_buffer = ybf->store_buf_adr[1];
+      ybf->v_buffer = ybf->store_buf_adr[2];
+      ybf->use_external_reference_buffers = 0;
+  }
+  unlock_buffer_pool(cm->buffer_pool_residue);
+  return 0;
+}
+#endif
+
 static INLINE int get_free_fb(AV1_COMMON *cm) {
   RefCntBuffer *const frame_bufs = cm->buffer_pool->frame_bufs;
   int i;
@@ -2749,6 +2793,13 @@ static INLINE RefCntBuffer *assign_cur_frame_new_fb(AV1_COMMON *const cm) {
   if (new_fb_idx == INVALID_IDX) return NULL;
 
   cm->cur_frame = &cm->buffer_pool->frame_bufs[new_fb_idx];
+
+#if CONFIG_MSCNN
+  const int residue_fb_idx = get_fb_residue(cm);
+  cm->cur_frame_residue = &cm->buffer_pool_residue->frame_bufs[residue_fb_idx]; // only 1 frame in residue pool
+  // cm->cur_frame_residue->buf.buf_8bit_valid = 0; TODOCNN v12中没有该变量
+#endif
+
 #if CONFIG_AV1_ENCODER
   aom_invalidate_pyramid(cm->cur_frame->buf.y_pyramid);
   av1_invalidate_corner_list(cm->cur_frame->buf.corners);

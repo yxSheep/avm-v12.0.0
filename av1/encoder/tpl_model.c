@@ -114,6 +114,15 @@ void setup_tpl_buffers(AV1_COMMON *const cm, TplParams *const tpl_data,
             tpl_data->border_in_pixels, cm->features.byte_alignment, false))
       aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
                          "Failed to allocate frame buffer");
+#if CONFIG_MSCNN
+    if (aom_alloc_residue_frame_buffer(
+            &tpl_data->tpl_residue_pool[frame], cm->width, cm->height,
+            cm->seq_params.subsampling_x, cm->seq_params.subsampling_y,
+            tpl_data->border_in_pixels,
+            cm->features.byte_alignment, false))
+      aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
+                         "Failed to allocate frame buffer");
+#endif
   }
 }
 
@@ -171,11 +180,19 @@ static int rate_estimator(const tran_low_t *qcoeff, int eob, TX_SIZE tx_size) {
   return (rate_cost << AV1_PROB_COST_SHIFT);
 }
 
+#if CONFIG_MSCNN
+static AOM_INLINE void txfm_quant_rdcost(
+    const MACROBLOCK *x, int16_t *src_diff, int diff_stride, uint16_t *src,
+    int src_stride, uint16_t *dst, int dst_stride, uint16_t *dstResidue, int dstResidue_stride, 
+    tran_low_t *coeff, tran_low_t *qcoeff, tran_low_t *dqcoeff, int bw, int bh, TX_SIZE tx_size,
+    int *rate_cost, int64_t *recon_error, int64_t *sse) {
+#else  
 static AOM_INLINE void txfm_quant_rdcost(
     const MACROBLOCK *x, int16_t *src_diff, int diff_stride, uint16_t *src,
     int src_stride, uint16_t *dst, int dst_stride, tran_low_t *coeff,
     tran_low_t *qcoeff, tran_low_t *dqcoeff, int bw, int bh, TX_SIZE tx_size,
     int *rate_cost, int64_t *recon_error, int64_t *sse) {
+#endif
   const MACROBLOCKD *xd = &x->e_mbd;
   uint16_t eob;
   tpl_subtract_block(xd, bh, bw, src_diff, diff_stride, src, src_stride, dst,
@@ -186,9 +203,14 @@ static AOM_INLINE void txfm_quant_rdcost(
                      sse);
 
   *rate_cost = rate_estimator(qcoeff, eob, tx_size);
-
+#if CONFIG_MSCNN
+  av1_inverse_transform_block(xd, dqcoeff, 0, DCT_DCT, tx_size, dst, dst_stride,
+                              dstResidue, dstResidue_stride,
+                              eob, 0, 0);
+#else
   av1_inverse_transform_block(xd, dqcoeff, 0, DCT_DCT, tx_size, dst, dst_stride,
                               eob, 0, 0);
+#endif
 }
 
 static uint32_t motion_estimation(AV1_COMP *cpi, MACROBLOCK *x,
@@ -331,7 +353,10 @@ static AOM_INLINE void mode_estimation(AV1_COMP *cpi, MACROBLOCK *x, int mi_row,
       mi_row * MI_SIZE * tpl_frame->rec_picture->y_stride + mi_col * MI_SIZE;
   uint16_t *dst_buffer = tpl_frame->rec_picture->y_buffer + dst_mb_offset;
   const int dst_buffer_stride = tpl_frame->rec_picture->y_stride;
-
+#if CONFIG_MSCNN
+  uint16_t *dstResidue_buffer = tpl_frame->residue_picture->y_buffer + dst_mb_offset;
+  const int dstResidue_buffer_stride = tpl_frame->residue_picture->y_stride;
+#endif
   // Number of pixels in a tpl block
   const int tpl_block_pels = tpl_data->tpl_bsize_1d * tpl_data->tpl_bsize_1d;
   // Allocate temporary buffers used in motion estimation.
@@ -572,9 +597,16 @@ static AOM_INLINE void mode_estimation(AV1_COMP *cpi, MACROBLOCK *x, int mi_row,
   }
 
   int rate_cost;
+#if CONFIG_MSCNN
+  txfm_quant_rdcost(x, src_diff, bw, src_mb_buffer, src_stride, dst_buffer,
+                    dst_buffer_stride, dstResidue_buffer, dstResidue_buffer_stride, 
+                    coeff, qcoeff, dqcoeff, bw, bh, tx_size,
+                    &rate_cost, &recon_error, &sse);
+#else
   txfm_quant_rdcost(x, src_diff, bw, src_mb_buffer, src_stride, dst_buffer,
                     dst_buffer_stride, coeff, qcoeff, dqcoeff, bw, bh, tx_size,
                     &rate_cost, &recon_error, &sse);
+#endif
 
   tpl_stats->recrf_dist = recon_error << (TPL_DEP_COST_SCALE_LOG2);
   tpl_stats->recrf_rate = rate_cost << TPL_DEP_COST_SCALE_LOG2;
@@ -1022,7 +1054,9 @@ static AOM_INLINE void init_gop_frames_for_tpl(
       tpl_data->tpl_frame[-i - 1].frame_display_index =
           cm->ref_frame_map[i]->display_order_hint;
     }
-
+#if CONFIG_MSCNN
+    tpl_data->tpl_frame[-i - 1].residue_picture = &cm->cur_frame_residue->buf;
+#endif
     ref_picture_map[i] = -i - 1;
   }
 
@@ -1082,6 +1116,9 @@ static AOM_INLINE void init_gop_frames_for_tpl(
         frame_update_type != KFFLT_OVERLAY_UPDATE &&
         frame_update_type != INTNL_OVERLAY_UPDATE) {
       tpl_frame->rec_picture = &tpl_data->tpl_rec_pool[process_frame_count];
+#if CONFIG_MSCNN
+      tpl_frame->residue_picture = &tpl_data->tpl_residue_pool[process_frame_count];
+#endif      
       tpl_frame->tpl_stats_ptr = tpl_data->tpl_stats_pool[process_frame_count];
       ++process_frame_count;
     }
@@ -1199,6 +1236,9 @@ static AOM_INLINE void init_gop_frames_for_tpl(
 
     tpl_frame->gf_picture = &buf->img;
     tpl_frame->rec_picture = &tpl_data->tpl_rec_pool[process_frame_count];
+#if CONFIG_MSCNN
+    tpl_frame->residue_picture = &tpl_data->tpl_residue_pool[process_frame_count];
+#endif    
     tpl_frame->tpl_stats_ptr = tpl_data->tpl_stats_pool[process_frame_count];
     // 'cm->current_frame.frame_number' is the display number
     // of the current frame.
@@ -1382,6 +1422,10 @@ void av1_tpl_setup_stats(AV1_COMP *cpi, int gop_eval,
 
     aom_extend_frame_borders(tpl_data->tpl_frame[frame_idx].rec_picture,
                              av1_num_planes(cm), 0);
+#if CONFIG_MSCNN
+    aom_extend_frame_borders(tpl_data->tpl_frame[frame_idx].residue_picture,
+                             av1_num_planes(cm), 0);
+#endif                             
   }
 
   for (int frame_idx = tpl_gf_group_frames - 1; frame_idx >= gf_group->index;

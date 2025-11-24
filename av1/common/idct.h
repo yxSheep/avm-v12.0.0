@@ -41,11 +41,21 @@ void av1_inv_cross_chroma_tx_block(tran_low_t *dqcoeff_c1,
                                    tran_low_t *dqcoeff_c2, TX_SIZE tx_size,
                                    CctxType cctx_type, const int bd);
 
+#if CONFIG_MSCNN
+void av1_inverse_transform_block(const MACROBLOCKD *xd,
+                                 const tran_low_t *dqcoeff, int plane,
+                                 TX_TYPE tx_type, TX_SIZE tx_size,
+                                 uint16_t *dst, int stride, 
+                                 uint16_t *dstResidue, int strideResidue, 
+                                 int eob, int use_ddt, int reduced_tx_set);
+#else
 void av1_inverse_transform_block(const MACROBLOCKD *xd,
                                  const tran_low_t *dqcoeff, int plane,
                                  TX_TYPE tx_type, TX_SIZE tx_size,
                                  uint16_t *dst, int stride, int eob,
                                  int use_ddt, int reduced_tx_set);
+#endif                                   
+
 void av1_highbd_iwht4x4_add(const tran_low_t *input, uint16_t *dest, int stride,
                             int eob, int bd);
 

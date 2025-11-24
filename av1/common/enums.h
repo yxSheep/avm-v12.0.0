@@ -1235,6 +1235,14 @@ typedef enum {
   WARP_PROJ_TYPES = 4, /**< Num projection types */
 } WarpProjectionType;
 
+#if CONFIG_MSCNN
+enum { SCALING_COUNT = 3 };
+enum { BLK_SIZE_COUNT = 4 };
+extern const int blk_sizes[BLK_SIZE_COUNT];
+enum { CNN_MODEL_COUNT = 4 }; // TODOCNN MODEL_COUNT 命名冲突
+enum {MODEL_BITS = 2};
+#endif
+
 /*!\endcond */
 
 #ifdef __cplusplus

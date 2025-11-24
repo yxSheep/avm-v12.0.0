@@ -145,13 +145,22 @@ int av1_find_interp_filter_match(
     const InterpFilter assign_filter, const int need_search,
     INTERPOLATION_FILTER_STATS *interp_filter_stats, MACROBLOCKD *xd,
     int interp_filter_stats_idx);
-
+#if CONFIG_MSCNN
+int64_t av1_interpolation_filter_search(
+    MACROBLOCK *const x, const AV1_COMP *const cpi,
+    const TileDataEnc *tile_data, BLOCK_SIZE bsize,
+    const BUFFER_SET *const tmp_dst, const BUFFER_SET *const tmp_dstResidue,
+    const BUFFER_SET *const orig_dst, const BUFFER_SET *const orig_dstResidue,
+    int64_t *const rd, int *const switchable_rate, int *skip_build_pred,
+    HandleInterModeArgs *args, int64_t ref_best_rd);
+#else
 int64_t av1_interpolation_filter_search(
     MACROBLOCK *const x, const AV1_COMP *const cpi,
     const TileDataEnc *tile_data, BLOCK_SIZE bsize,
     const BUFFER_SET *const tmp_dst, const BUFFER_SET *const orig_dst,
     int64_t *const rd, int *const switchable_rate, int *skip_build_pred,
     HandleInterModeArgs *args, int64_t ref_best_rd);
+#endif
 
 /*!\endcond */
 #ifdef __cplusplus

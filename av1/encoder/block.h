@@ -141,7 +141,9 @@ typedef struct macroblock_plane {
   uint8_t *txb_entropy_ctx;
   //! A buffer containing the source frame.
   struct buf_2d src;
-
+#if CONFIG_MSCNN
+  struct buf_2d residue;
+#endif
   /*! \name Quantizer Settings
    *
    * \attention These are used/accessed only in the quantization process.
@@ -1222,6 +1224,10 @@ typedef struct {
    */
   int dpcm_uv_vert_horz_cost[2];
   /**@}*/
+  
+#if CONFIG_MSCNN
+  int nn_cost[2][2][2];
+#endif  
 } ModeCosts;
 
 /*! \brief Holds mv costs for encoding and motion search.
@@ -1393,6 +1399,10 @@ typedef struct macroblock {
    * is used to pingpong the prediction in handle_inter_mode.
    */
   uint16_t *tmp_pred_bufs[2];
+
+#if CONFIG_MSCNN
+  uint16_t *tmpResidue_bufs[2];
+#endif
 
   /*!
    *  Buffer used for upsampled prediction.

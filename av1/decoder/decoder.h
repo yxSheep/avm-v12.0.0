@@ -468,12 +468,22 @@ aom_codec_err_t av1_copy_new_frame_dec(AV1_COMMON *cm,
                                        YV12_BUFFER_CONFIG *new_frame,
                                        YV12_BUFFER_CONFIG *sd);
 
+#if CONFIG_MSCNN
+#if CONFIG_PARAKIT_COLLECT_DATA
+struct AV1Decoder *av1_decoder_create(BufferPool *const pool, 
+                                      BufferPool *const pool_residue, const char *path,
+                                      const char *suffix);
+#else
+struct AV1Decoder *av1_decoder_create(BufferPool *const pool, BufferPool *const pool_residue);
+#endif
+#else
 #if CONFIG_PARAKIT_COLLECT_DATA
 struct AV1Decoder *av1_decoder_create(BufferPool *const pool, const char *path,
                                       const char *suffix);
 #else
 struct AV1Decoder *av1_decoder_create(BufferPool *const pool);
 #endif
+#endif                                       
 
 void av1_decoder_remove(struct AV1Decoder *pbi);
 void av1_dealloc_dec_jobs(struct AV1DecTileMTData *tile_mt_info);

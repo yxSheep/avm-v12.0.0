@@ -506,13 +506,21 @@ void av1_cdef_fb_row(AV1_COMMON *const cm, MACROBLOCKD *const xd,
   }
 }
 
+#if CONFIG_MSCNN
+void av1_cdef_frame(YV12_BUFFER_CONFIG *frame, YV12_BUFFER_CONFIG *residue,
+                    AV1_COMMON *cm, MACROBLOCKD *xd,
+                    cdef_init_fb_row_t cdef_init_fb_row_fn) {
+#else
 void av1_cdef_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm, MACROBLOCKD *xd,
                     cdef_init_fb_row_t cdef_init_fb_row_fn) {
+#endif
   const int num_planes = av1_num_planes(cm);
   const int nvfb = (cm->mi_params.mi_rows + MI_SIZE_64X64 - 1) / MI_SIZE_64X64;
-
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, frame, residue, 0, 0, 0, num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, frame, 0, 0, 0, num_planes, NULL);
-
+#endif
   for (int fbr = 0; fbr < nvfb; fbr++)
     av1_cdef_fb_row(cm, xd, cm->cdef_info.linebuf, cm->cdef_info.colbuf,
                     cm->cdef_info.srcbuf, fbr, cdef_init_fb_row_fn, NULL);

@@ -201,9 +201,14 @@ static INLINE void set_offsets_for_motion_search(const AV1_COMP *const cpi,
                         mi_row, mi_col, mi_width, mi_height);
 
   // Set up destination pointers.
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 
+                       &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+                       num_planes, NULL);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,
                        num_planes, NULL);
-
+#endif
   // Set up limit values for MV components.
   // Mv beyond the range do not produce new/different prediction block.
   av1_set_mv_limits(mi_params, &x->mv_limits, mi_row, mi_col, mi_height,

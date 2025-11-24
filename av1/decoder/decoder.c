@@ -43,6 +43,10 @@
 #include "av1/decoder/detokenize.h"
 #include "av1/decoder/obu.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/nn_loopfilter.h"
+#endif
+
 #if CONFIG_PARAKIT_COLLECT_DATA
 #include "av1/common/entropy_sideinfo.h"
 int beginningFrameFlag[MAX_NUMBER_CONTEXTS][MAX_DIMS_CONTEXT3]
@@ -170,11 +174,21 @@ static INLINE void dec_free_optflow_bufs(AV1_COMMON *const cm) {
   aom_free(cm->gx1);
 }
 
+#if CONFIG_MSCNN
+#if CONFIG_PARAKIT_COLLECT_DATA
+AV1Decoder *av1_decoder_create(BufferPool *const pool, 
+                               BufferPool *const pool_residue, const char *path,
+                               const char *suffix) {
+#else
+AV1Decoder *av1_decoder_create(BufferPool *const pool, BufferPool *const pool_residue) {
+#endif
+#else
 #if CONFIG_PARAKIT_COLLECT_DATA
 AV1Decoder *av1_decoder_create(BufferPool *const pool, const char *path,
                                const char *suffix) {
 #else
 AV1Decoder *av1_decoder_create(BufferPool *const pool) {
+#endif
 #endif
   AV1Decoder *volatile const pbi = aom_memalign(32, sizeof(*pbi));
   if (!pbi) return NULL;
@@ -212,7 +226,9 @@ AV1Decoder *av1_decoder_create(BufferPool *const pool) {
   cm->current_frame.frame_number = 0;
   pbi->decoding_first_frame = 1;
   pbi->common.buffer_pool = pool;
-
+#if CONFIG_MSCNN
+  pbi->common.buffer_pool_residue = pool_residue;
+#endif
   cm->seq_params.bit_depth = AOM_BITS_8;
   cm->seq_params.chroma_sample_position = AOM_CSP_UNSPECIFIED;
 
@@ -841,6 +857,11 @@ int av1_receive_compressed_data(AV1Decoder *pbi, size_t size,
 
   int frame_decoded =
       aom_decode_frame_from_obus(pbi, source, source + size, psource);
+
+#if CONFIG_MSCNN
+  av1_free_residue_frame_buffers(pbi->common.buffer_pool_residue);
+#endif
+
 #if CONFIG_INSPECTION
   if (cm->features.tip_frame_mode == TIP_FRAME_AS_OUTPUT) {
     if (pbi->inspect_tip_cb != NULL) {

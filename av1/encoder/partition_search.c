@@ -425,9 +425,14 @@ void av1_set_offsets_without_segment_id(
   set_entropy_context(xd, mi_row, mi_col, num_planes, chroma_ref_info);
 
   // Set up destination pointers.
+#if CONFIG_MSCNN
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, 
+                       &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+                       num_planes, chroma_ref_info);
+#else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,
                        num_planes, chroma_ref_info);
-
+#endif
   // Set up limit values for MV components.
   // Mv beyond the range do not produce new/different prediction block.
   av1_set_mv_limits(&cm->mi_params, &x->mv_limits, mi_row, mi_col, mi_height,

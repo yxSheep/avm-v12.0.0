@@ -922,8 +922,20 @@ static AOM_INLINE void inverse_transform_block_facade(
   const int dst_stride = pd->dst.stride;
   uint16_t *dst =
       &pd->dst.buf[(blk_row * dst_stride + blk_col) << MI_SIZE_LOG2];
+#if CONFIG_MSCNN
+  // int32_t *residueCoeff = p->residueCoeff + BLOCK_OFFSET(block);
+  const int dstResidue_stride = pd->dstResidue.stride;
+  uint16_t *dstResidue =
+      &pd->dstResidue
+           .buf[(blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2];
+
+  av1_inverse_transform_block(xd, dqcoeff, plane, tx_type, tx_size, dst,
+                              dst_stride, dstResidue, dstResidue_stride, eob,
+                              use_ddt, reduced_tx_set);
+#else
   av1_inverse_transform_block(xd, dqcoeff, plane, tx_type, tx_size, dst,
                               dst_stride, eob, use_ddt, reduced_tx_set);
+#endif
 }
 
 static INLINE void recon_intra(const AV1_COMP *cpi, MACROBLOCK *x, int plane,
@@ -1105,12 +1117,23 @@ static INLINE int64_t dist_block_px_domain(const AV1_COMP *cpi, MACROBLOCK *x,
   TX_TYPE tx_type =
       av1_get_tx_type(xd, plane_type, blk_row, blk_col, tx_size,
                       is_reduced_tx_set_used(&cpi->common, plane_type));
+#if CONFIG_MSCNN
+  uint16_t *residue;
+  DECLARE_ALIGNED(32, int32_t, residue32[MAX_TX_SQUARE]);
+  residue = (uint16_t *)residue32;
+  av1_inverse_transform_block(
+      xd, dqcoeff, plane, tx_type, tx_size, recon, MAX_TX_SIZE, 
+      residue, MAX_TX_SIZE, eob,
+      replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
+                          cpi->common.features.allow_screen_content_tools, xd),
+      cpi->common.features.reduced_tx_set_used);
+#else
   av1_inverse_transform_block(
       xd, dqcoeff, plane, tx_type, tx_size, recon, MAX_TX_SIZE, eob,
       replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
                           cpi->common.features.allow_screen_content_tools, xd),
       cpi->common.features.reduced_tx_set_used);
-
+#endif
   return 16 * pixel_dist(cpi, x, plane, src, src_stride, recon, MAX_TX_SIZE,
                          blk_row, blk_col, tx_bsize);
 }
@@ -1171,6 +1194,22 @@ static INLINE int64_t joint_uv_dist_block_px_domain(const AV1_COMP *cpi,
                       is_reduced_tx_set_used(&cpi->common, PLANE_TYPE_UV));
   av1_inv_cross_chroma_tx_block(tmp_dqcoeff_c1, tmp_dqcoeff_c2, tx_size,
                                 cctx_type, xd->bd);
+#if CONFIG_MSCNN
+  uint16_t *residue_c1 = (uint16_t *)aom_memalign(32, MAX_TX_SQUARE * sizeof(uint32_t));
+  uint16_t *residue_c2 = (uint16_t *)aom_memalign(32, MAX_TX_SQUARE * sizeof(uint32_t));
+  av1_inverse_transform_block(
+      xd, tmp_dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, recon_c1, MAX_TX_SIZE, residue_c1, MAX_TX_SIZE,
+      max_chroma_eob,
+      replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
+                          cpi->common.features.allow_screen_content_tools, xd),
+      cpi->common.features.reduced_tx_set_used);
+  av1_inverse_transform_block(
+      xd, tmp_dqcoeff_c2, AOM_PLANE_V, tx_type, tx_size, recon_c2, MAX_TX_SIZE, residue_c2, MAX_TX_SIZE,
+      max_chroma_eob,
+      replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
+                          cpi->common.features.allow_screen_content_tools, xd),
+      cpi->common.features.reduced_tx_set_used);
+#else
   av1_inverse_transform_block(
       xd, tmp_dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, recon_c1, MAX_TX_SIZE,
       max_chroma_eob,
@@ -1183,6 +1222,8 @@ static INLINE int64_t joint_uv_dist_block_px_domain(const AV1_COMP *cpi,
       replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
                           cpi->common.features.allow_screen_content_tools, xd),
       cpi->common.features.reduced_tx_set_used);
+#endif
+
   aom_free(tmp_dqcoeff_c1);
   aom_free(tmp_dqcoeff_c2);
 
@@ -1194,7 +1235,10 @@ static INLINE int64_t joint_uv_dist_block_px_domain(const AV1_COMP *cpi,
                  MAX_TX_SIZE, blk_row, blk_col, tx_bsize);
   aom_free(recon_c1);
   aom_free(recon_c2);
-
+#if CONFIG_MSCNN
+  aom_free(residue_c1);
+  aom_free(residue_c2);
+#endif
   return 16 * (dist_c1 + dist_c2);
 }
 

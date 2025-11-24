@@ -749,11 +749,20 @@ static int handle_wedge_inter_intra_mode(
   return 0;
 }
 
+#if CONFIG_MSCNN
+int av1_handle_inter_intra_mode(const AV1_COMP *const cpi, MACROBLOCK *const x,
+                                BLOCK_SIZE bsize, MB_MODE_INFO *mbmi,
+                                HandleInterModeArgs *args, int64_t ref_best_rd,
+                                int *rate_mv, int *tmp_rate2,
+                                const BUFFER_SET *orig_dst,
+                                const BUFFER_SET *orig_dstResidue) {
+#else
 int av1_handle_inter_intra_mode(const AV1_COMP *const cpi, MACROBLOCK *const x,
                                 BLOCK_SIZE bsize, MB_MODE_INFO *mbmi,
                                 HandleInterModeArgs *args, int64_t ref_best_rd,
                                 int *rate_mv, int *tmp_rate2,
                                 const BUFFER_SET *orig_dst) {
+#endif
   const MOTION_MODE org_motion_mode = mbmi->motion_mode;
   const MOTION_MODE org_warp_inter_intra = mbmi->warp_inter_intra;
   const int try_smooth_interintra =
@@ -780,13 +789,24 @@ int av1_handle_inter_intra_mode(const AV1_COMP *const cpi, MACROBLOCK *const x,
   mbmi->warp_inter_intra = 0;
   xd->plane[0].dst.buf = tmp_buf;
   xd->plane[0].dst.stride = bw;
+
+#if CONFIG_MSCNN
+  DECLARE_ALIGNED(32, int32_t, tmp_buf_residue_[2 * MAX_INTERINTRA_SB_SQUARE]);
+  uint16_t *tmp_buf_residue = (uint16_t *)
+      tmp_buf_residue_;  
+  xd->plane[0].dstResidue.buf = tmp_buf_residue;
+  xd->plane[0].dstResidue.stride = bw;
+#endif
+
   av1_enc_build_inter_predictor(cm, xd, mi_row, mi_col, orig_dst, bsize,
                                 AOM_PLANE_Y, AOM_PLANE_Y);
   const int num_planes = av1_num_planes(cm);
 
   // Restore the buffers for intra prediction
   restore_dst_buf(xd, *orig_dst, num_planes);
-
+#if CONFIG_MSCNN
+  restore_dstResidue_buf(xd, *orig_dstResidue, num_planes);
+#endif
   mbmi->warp_inter_intra = org_warp_inter_intra;
 
   mbmi->motion_mode = org_motion_mode;
@@ -1267,6 +1287,15 @@ static int64_t masked_compound_type_rd(
 static int comp_type_rd_threshold_mul[3] = { 1, 11, 12 };
 static int comp_type_rd_threshold_div[3] = { 3, 16, 16 };
 
+#if CONFIG_MSCNN
+int av1_compound_type_rd(
+    const AV1_COMP *const cpi, MACROBLOCK *x, BLOCK_SIZE bsize, int_mv *cur_mv,
+    int mode_search_mask, int masked_compound_used, const BUFFER_SET *orig_dst,
+    const BUFFER_SET *orig_dstResidue, const BUFFER_SET *tmp_dst,
+    const BUFFER_SET *tmp_dstResidue, const CompoundTypeRdBuffers *buffers,
+    int *rate_mv, int64_t *rd, RD_STATS *rd_stats, int64_t ref_best_rd,
+    int64_t ref_skip_rd, int *is_luma_interp_done, int64_t rd_thresh) {
+#else
 int av1_compound_type_rd(const AV1_COMP *const cpi, MACROBLOCK *x,
                          BLOCK_SIZE bsize, int_mv *cur_mv, int mode_search_mask,
                          int masked_compound_used, const BUFFER_SET *orig_dst,
@@ -1275,6 +1304,7 @@ int av1_compound_type_rd(const AV1_COMP *const cpi, MACROBLOCK *x,
                          int64_t *rd, RD_STATS *rd_stats, int64_t ref_best_rd,
                          int64_t ref_skip_rd, int *is_luma_interp_done,
                          int64_t rd_thresh) {
+#endif
   const AV1_COMMON *cm = &cpi->common;
   MACROBLOCKD *xd = &x->e_mbd;
   MB_MODE_INFO *mbmi = xd->mi[0];
@@ -1361,7 +1391,14 @@ int av1_compound_type_rd(const AV1_COMP *const cpi, MACROBLOCK *x,
   }
 
   // If COMPOUND_AVERAGE is not valid, use the spare buffer
+#if CONFIG_MSCNN
+  if (valid_comp_types[0] != COMPOUND_AVERAGE) {
+    restore_dst_buf(xd, *tmp_dst, 1);
+    restore_dstResidue_buf(xd, *tmp_dstResidue, 1);
+  }
+#else
   if (valid_comp_types[0] != COMPOUND_AVERAGE) restore_dst_buf(xd, *tmp_dst, 1);
+#endif
 
   // Loop over valid compound types
   for (int i = 0; i < valid_type_count; i++) {
@@ -1434,7 +1471,14 @@ int av1_compound_type_rd(const AV1_COMP *const cpi, MACROBLOCK *x,
         }
       }
       // use spare buffer for following compound type try
+#if CONFIG_MSCNN
+      if (cur_type == COMPOUND_AVERAGE) {
+        restore_dst_buf(xd, *tmp_dst, 1);
+        restore_dstResidue_buf(xd, *tmp_dstResidue, 1);
+      }
+#else
       if (cur_type == COMPOUND_AVERAGE) restore_dst_buf(xd, *tmp_dst, 1);
+#endif
     } else {
       // Handle masked compound types
       update_mbmi_for_compound_type(mbmi, cur_type);
@@ -1496,6 +1540,9 @@ int av1_compound_type_rd(const AV1_COMP *const cpi, MACROBLOCK *x,
     }
   }
   restore_dst_buf(xd, *orig_dst, 1);
+#if CONFIG_MSCNN
+  restore_dstResidue_buf(xd, *orig_dstResidue, 1);
+#endif
   if (!match_found && reuse_compound_type_data)
     save_comp_rd_search_stat(x, mbmi, comp_rate, comp_dist, comp_model_rate,
                              comp_model_dist, cur_mv, comp_rs2);

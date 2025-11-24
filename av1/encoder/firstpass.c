@@ -336,11 +336,21 @@ static double raw_motion_error_stdev(int *raw_motion_err_list,
 //   stats->frame_avg_wavelet_energy
 // Returns:
 //   this_intra_error.
+#if CONFIG_MSCNN
+static int firstpass_intra_prediction(
+    AV1_COMP *cpi, ThreadData *td, YV12_BUFFER_CONFIG *const this_frame,
+    YV12_BUFFER_CONFIG *const this_residue,
+    const TileInfo *const tile, const int mb_row, const int mb_col,
+    const int y_offset, const int uv_offset, 
+    const int residue_y_offset, const int residue_uv_offset, const BLOCK_SIZE fp_block_size,
+    const int qindex, FRAME_STATS *const stats) {
+#else
 static int firstpass_intra_prediction(
     AV1_COMP *cpi, ThreadData *td, YV12_BUFFER_CONFIG *const this_frame,
     const TileInfo *const tile, const int mb_row, const int mb_col,
     const int y_offset, const int uv_offset, const BLOCK_SIZE fp_block_size,
     const int qindex, FRAME_STATS *const stats) {
+#endif
   const AV1_COMMON *const cm = &cpi->common;
   const CommonModeInfoParams *const mi_params = &cm->mi_params;
   const SequenceHeader *const seq_params = &cm->seq_params;
@@ -363,6 +373,11 @@ static int firstpass_intra_prediction(
   xd->plane[0].dst.buf = this_frame->y_buffer + y_offset;
   xd->plane[1].dst.buf = this_frame->u_buffer + uv_offset;
   xd->plane[2].dst.buf = this_frame->v_buffer + uv_offset;
+#if CONFIG_MSCNN
+  xd->plane[0].dstResidue.buf = this_residue->y_buffer + residue_y_offset;
+  xd->plane[1].dstResidue.buf = this_residue->u_buffer + residue_uv_offset;
+  xd->plane[2].dstResidue.buf = this_residue->v_buffer + residue_uv_offset;
+#endif
   xd->left_available = (mb_col != 0);
   xd->mi[0]->sb_type[xd->tree_type == CHROMA_PART] = bsize;
   xd->mi[0]->ref_frame[0] = INTRA_FRAME;
@@ -1028,10 +1043,25 @@ void av1_first_pass_row(AV1_COMP *cpi, ThreadData *td, TileDataEnc *tile_data,
     if (mb_col_in_tile == 0) {
       last_mv = *first_top_mv;
     }
+#if CONFIG_MSCNN
+    YV12_BUFFER_CONFIG *const this_residue = &cm->cur_frame_residue->buf;
+    const int residue_y_stride = this_residue->y_stride;
+    const int residue_uv_stride = this_residue->uv_stride;
+
+    int residue_yoffset = (mb_row * residue_y_stride * fp_block_size_height) +
+                        (mb_col_start * fp_block_size_width);
+    int residue_uvoffset = (mb_row * residue_uv_stride * uv_mb_height) +
+                         (mb_col_start * uv_mb_height);
+
+    int this_intra_error = firstpass_intra_prediction(
+        cpi, td, this_frame, this_residue, tile, mb_row, mb_col, recon_yoffset,
+        recon_uvoffset, residue_yoffset, residue_uvoffset, fp_block_size,
+        qindex, mb_stats);
+#else
     int this_intra_error = firstpass_intra_prediction(
         cpi, td, this_frame, tile, mb_row, mb_col, recon_yoffset,
         recon_uvoffset, fp_block_size, qindex, mb_stats);
-
+#endif    
     if (!frame_is_intra_only(cm)) {
       const int this_inter_error = firstpass_inter_prediction(
           cpi, td, last_frame, golden_frame, alt_ref_frame, mb_row, mb_col,
@@ -1135,8 +1165,11 @@ void av1_first_pass(AV1_COMP *cpi, const int64_t ts_duration) {
                          seq_params->subsampling_y, num_planes);
 
   av1_setup_src_planes(x, cpi->source, 0, 0, num_planes, NULL);
-  av1_setup_dst_planes(xd->plane, this_frame, 0, 0, 0, num_planes, NULL);
-
+#if CONFIG_MSCNN
+    av1_setup_dst_planes(xd->plane, this_frame, &cm->cur_frame_residue->buf, 0, 0, 0, num_planes, NULL);
+#else
+    av1_setup_dst_planes(xd->plane, this_frame, 0, 0, 0, num_planes, NULL);
+#endif
   if (!frame_is_intra_only(cm)) {
     av1_setup_pre_planes(xd, 0, last_frame, 0, 0, NULL, num_planes, NULL);
   }

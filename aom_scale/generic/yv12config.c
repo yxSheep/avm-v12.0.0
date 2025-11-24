@@ -288,3 +288,190 @@ int aom_copy_metadata_to_frame_buffer(YV12_BUFFER_CONFIG *ybf,
   ybf->metadata->sz = arr->sz;
   return 0;
 }
+
+#if CONFIG_MSCNN
+static int realloc_residue_frame_buffer_aligned(
+    YV12_BUFFER_CONFIG *ybf, int width, int height, int ss_x, int ss_y,
+    int border, int byte_alignment, aom_codec_frame_buffer_t *fb,
+    aom_get_frame_buffer_cb_fn_t cb, void *cb_priv, const int y_stride,
+    const uint64_t yplane_size, const uint64_t uvplane_size,
+    const int aligned_width, const int aligned_height, const int uv_width,
+    const int uv_height, const int uv_stride, const int uv_border_w,
+    const int uv_border_h, bool alloc_pyramid) {
+  if (ybf) {
+    const int aom_byte_align = (byte_alignment == 0) ? 1 : byte_alignment;
+    const uint64_t frame_size = 4 * (yplane_size + 2 * uvplane_size);
+
+    uint16_t *buf = NULL;
+
+#if !CONFIG_AV1_ENCODER
+    // We should only need an 8-bit version of the source frame if we are
+    // encoding in non-realtime mode
+    (void)alloc_pyramid;
+    assert(!alloc_pyramid);
+#endif  // !CONFIG_AV1_ENCODER
+
+#if defined AOM_MAX_ALLOCABLE_MEMORY
+    // The size of ybf->buffer_alloc.
+    uint64_t alloc_size = frame_size;
+#if CONFIG_AV1_ENCODER
+    // The size of ybf->y_pyramid
+    if (alloc_pyramid) {
+      alloc_size += aom_get_pyramid_alloc_size(width, height);
+      alloc_size += av1_get_corner_list_size();
+    }
+#endif  // CONFIG_AV1_ENCODER
+    // The decoder may allocate REF_FRAMES frame buffers in the frame buffer
+    // pool. Bound the total amount of allocated memory as if these REF_FRAMES
+    // frame buffers were allocated in a single allocation.
+    if (alloc_size > AOM_MAX_ALLOCABLE_MEMORY / REF_FRAMES)
+      return AOM_CODEC_MEM_ERROR;
+#endif
+
+    if (cb != NULL) {
+      const int align_addr_extra_size = 31;
+      const uint64_t external_frame_size = frame_size + align_addr_extra_size;
+
+      assert(fb != NULL);
+
+      if (external_frame_size != (size_t)external_frame_size)
+        return AOM_CODEC_MEM_ERROR;
+
+      // Allocation to hold larger frame, or first allocation.
+      if (cb(cb_priv, (size_t)external_frame_size, fb) < 0)
+        return AOM_CODEC_MEM_ERROR;
+
+      if (fb->data == NULL || fb->size < external_frame_size)
+        return AOM_CODEC_MEM_ERROR;
+
+      ybf->buffer_alloc = (uint8_t *)aom_align_addr(fb->data, 32);
+
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+      // This memset is needed for fixing the issue of using uninitialized
+      // value in msan test. It will cause a perf loss, so only do this for
+      // msan test.
+      memset(ybf->buffer_alloc, 0, (size_t)frame_size);
+#endif
+#endif
+    } else if (frame_size > ybf->buffer_alloc_sz) {
+      // Allocation to hold larger frame, or first allocation.
+      aom_free(ybf->buffer_alloc);
+      ybf->buffer_alloc = NULL;
+      ybf->buffer_alloc_sz = 0;
+
+      if (frame_size != (size_t)frame_size) return AOM_CODEC_MEM_ERROR;
+
+      ybf->buffer_alloc = (uint8_t *)aom_memalign(32, (size_t)frame_size);
+      if (!ybf->buffer_alloc) return AOM_CODEC_MEM_ERROR;
+
+      ybf->buffer_alloc_sz = (size_t)frame_size;
+
+      // This memset is needed for fixing valgrind error from C loop filter
+      // due to access uninitialized memory in frame border. It could be
+      // removed if border is totally removed.
+      memset(ybf->buffer_alloc, 0, ybf->buffer_alloc_sz);
+    }
+
+    ybf->y_crop_width = width;
+    ybf->y_crop_height = height;
+    ybf->y_width = aligned_width;
+    ybf->y_height = aligned_height;
+    ybf->y_stride = y_stride;
+
+    ybf->uv_crop_width = (width + ss_x) >> ss_x;
+    ybf->uv_crop_height = (height + ss_y) >> ss_y;
+    ybf->uv_width = uv_width;
+    ybf->uv_height = uv_height;
+    ybf->uv_stride = uv_stride;
+
+    ybf->border = border;
+    ybf->frame_size = (size_t)frame_size;
+    ybf->subsampling_x = ss_x;
+    ybf->subsampling_y = ss_y;
+
+    // Store uint16 addresses when using 16bit framebuffers
+    buf = (uint16_t *)ybf->buffer_alloc; // TODOCNN 需要加CONVERT_INT32PTR_TO_UINT16PTR吗
+
+    ybf->y_buffer = (uint16_t *)aom_align_addr(
+        buf + (border * y_stride) + border, aom_byte_align);
+    ybf->u_buffer = (uint16_t *)aom_align_addr(
+        buf + yplane_size + (uv_border_h * uv_stride) + uv_border_w,
+        aom_byte_align);
+    ybf->v_buffer =
+        (uint16_t *)aom_align_addr(buf + yplane_size + uvplane_size +
+                                       (uv_border_h * uv_stride) + uv_border_w,
+                                   aom_byte_align);
+
+    ybf->use_external_reference_buffers = 0;
+
+#if CONFIG_AV1_ENCODER
+    if (ybf->y_pyramid) {
+      aom_free_pyramid(ybf->y_pyramid);
+      ybf->y_pyramid = NULL;
+    }
+    if (ybf->corners) {
+      av1_free_corner_list(ybf->corners);
+      ybf->corners = NULL;
+    }
+    if (alloc_pyramid) {
+      ybf->y_pyramid = aom_alloc_pyramid(width, height);
+      if (!ybf->y_pyramid) return AOM_CODEC_MEM_ERROR;
+      ybf->corners = av1_alloc_corner_list();
+      if (!ybf->corners) return AOM_CODEC_MEM_ERROR;
+    }
+#endif  // CONFIG_AV1_ENCODER
+
+    ybf->corrupted = 0; /* assume not corrupted by errors */
+    return 0;
+  }
+  return AOM_CODEC_MEM_ERROR;
+}
+
+int aom_realloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
+                             int ss_x, int ss_y, int border, int byte_alignment,
+                             aom_codec_frame_buffer_t *fb,
+                             aom_get_frame_buffer_cb_fn_t cb, void *cb_priv,
+                             bool alloc_pyramid) {
+#if CONFIG_SIZE_LIMIT
+  if (width > DECODE_WIDTH_LIMIT || height > DECODE_HEIGHT_LIMIT)
+    return AOM_CODEC_MEM_ERROR;
+#endif
+
+  if (ybf) {
+    int y_stride = 0;
+    int uv_stride = 0;
+    uint64_t yplane_size = 0;
+    uint64_t uvplane_size = 0;
+    const int aligned_width = (width + 7) & ~7;
+    const int aligned_height = (height + 7) & ~7;
+    const int uv_width = aligned_width >> ss_x;
+    const int uv_height = aligned_height >> ss_y;
+    const int uv_border_w = border >> ss_x;
+    const int uv_border_h = border >> ss_y;
+
+    int error = calc_stride_and_planesize(
+        ss_x, ss_y, aligned_width, aligned_height, border, byte_alignment,
+        &y_stride, &uv_stride, &yplane_size, &uvplane_size, uv_height);
+    if (error) return error;
+    return realloc_residue_frame_buffer_aligned(
+        ybf, width, height, ss_x, ss_y, border, byte_alignment, fb, cb, cb_priv,
+        y_stride, yplane_size, uvplane_size, aligned_width, aligned_height,
+        uv_width, uv_height, uv_stride, uv_border_w, uv_border_h,
+        alloc_pyramid);
+  }
+  return AOM_CODEC_MEM_ERROR;
+}
+
+int aom_alloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
+                           int ss_x, int ss_y, int border, int byte_alignment,
+                           bool alloc_pyramid) {
+  if (ybf) {
+    aom_free_frame_buffer(ybf);
+    return aom_realloc_residue_frame_buffer(ybf, width, height, ss_x, ss_y, border,
+                                    byte_alignment, NULL, NULL, NULL,
+                                    alloc_pyramid);
+  }
+  return AOM_CODEC_MEM_ERROR;
+}
+#endif

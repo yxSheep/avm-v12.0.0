@@ -283,6 +283,9 @@ typedef struct frame_contexts {
   aom_cdf_prob switchable_flex_restore_cdf[MAX_LR_FLEX_SWITCHABLE_BITS]
                                           [MAX_LR_FLEX_MB_PLANE][CDF_SIZE(2)];
   aom_cdf_prob ccso_cdf[3][CCSO_CONTEXT][CDF_SIZE(2)];
+#if CONFIG_MSCNN
+  aom_cdf_prob nn_cdf[2][2][CDF_SIZE(2)];
+#endif  
   // CDF for CDEF strength index 0
   aom_cdf_prob cdef_strength_index0_cdf[CDEF_STRENGTH_INDEX0_CTX][CDF_SIZE(2)];
   // CDF for CDEF all other strength index

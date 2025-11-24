@@ -1741,6 +1741,9 @@ typedef struct ThreadData {
   // during the OPFL/DMVR.
   uint16_t *opfl_dst_bufs;
   uint16_t *tmp_pred_bufs[2];
+#if CONFIG_MSCNN
+  uint16_t *tmpResidue_bufs[2];
+#endif
   // Buffer used for upsampled prediction.
   uint16_t *upsample_pred;
   int intrabc_used;
@@ -3128,6 +3131,16 @@ typedef struct {
 // Must not be called more than once.
 void av1_initialize_enc(void);
 
+#if CONFIG_MSCNN
+struct AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf,
+                                       BufferPool *const pool,
+                                       BufferPool *const pool_residue,
+                                       FIRSTPASS_STATS *frame_stats_buf,
+                                       COMPRESSOR_STAGE stage,
+                                       int num_lap_buffers,
+                                       int lap_lag_in_frames,
+                                       STATS_BUFFER_CTX *stats_buf_context);
+#else
 struct AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf,
                                        BufferPool *const pool,
                                        FIRSTPASS_STATS *frame_stats_buf,
@@ -3135,6 +3148,8 @@ struct AV1_COMP *av1_create_compressor(AV1EncoderConfig *oxcf,
                                        int num_lap_buffers,
                                        int lap_lag_in_frames,
                                        STATS_BUFFER_CTX *stats_buf_context);
+#endif
+
 void av1_remove_compressor(AV1_COMP *cpi);
 
 void av1_change_config(AV1_COMP *cpi, const AV1EncoderConfig *oxcf);

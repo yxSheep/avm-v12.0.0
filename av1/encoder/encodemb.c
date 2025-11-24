@@ -875,7 +875,11 @@ static void encode_block(int plane, int block, int blk_row, int blk_col,
 
   const int bw = mi_size_wide[plane_bsize];
   dst = &pd->dst.buf[(blk_row * pd->dst.stride + blk_col) << MI_SIZE_LOG2];
-
+#if CONFIG_MSCNN
+  uint16_t *dstResidue =
+      &pd->dstResidue
+           .buf[(blk_row * pd->dstResidue.stride + blk_col) << MI_SIZE_LOG2];
+#endif
   a = &args->ta[blk_col];
   l = &args->tl[blk_row];
 
@@ -1035,6 +1039,9 @@ static void encode_block(int plane, int block, int blk_row, int blk_col,
     uint16_t *dst_c1 =
         &pd_c1->dst
              .buf[(blk_row * pd_c1->dst.stride + blk_col) << MI_SIZE_LOG2];
+#if CONFIG_MSCNN
+    uint16_t *dstResidue_c1 = &pd_c1->dstResidue.buf[(blk_row * pd_c1->dstResidue.stride + blk_col) << MI_SIZE_LOG2];
+#endif             
     int eob_c1 = p_c1->eobs[block];
     int eob_c2 = x->plane[AOM_PLANE_V].eobs[block];
     const int is_inter = is_inter_block(mbmi, xd->tree_type);
@@ -1044,17 +1051,36 @@ static void encode_block(int plane, int block, int blk_row, int blk_col,
     if (recon_with_cctx) {
       av1_inv_cross_chroma_tx_block(dqcoeff_c1, dqcoeff, tx_size, cctx_type,
                                     xd->bd);
+#if CONFIG_MSCNN
+      av1_inverse_transform_block(
+          xd, dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, dst_c1, pd_c1->dst.stride, 
+          dstResidue_c1, pd_c1->dstResidue.stride, max_chroma_eob,
+          replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                              cm->features.allow_screen_content_tools, xd),
+          cm->features.reduced_tx_set_used);
+#else
       av1_inverse_transform_block(
           xd, dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, dst_c1,
           pd_c1->dst.stride, max_chroma_eob,
           replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
                               cm->features.allow_screen_content_tools, xd),
           cm->features.reduced_tx_set_used);
+#endif
     }
   }
 
   if (p->eobs[block] || recon_with_cctx) {
     *(args->skip) = 0;
+#if CONFIG_MSCNN
+    av1_inverse_transform_block(
+        xd, dqcoeff, plane, tx_type, tx_size, dst, pd->dst.stride, dstResidue, pd->dstResidue.stride, 
+        (plane == 0 || !is_cctx_allowed(cm, xd) || !recon_with_cctx)
+            ? p->eobs[block]
+            : max_chroma_eob,
+        replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                            cm->features.allow_screen_content_tools, xd),
+        cm->features.reduced_tx_set_used);
+#else
     av1_inverse_transform_block(
         xd, dqcoeff, plane, tx_type, tx_size, dst, pd->dst.stride,
         (plane == 0 || !is_cctx_allowed(cm, xd) || !recon_with_cctx)
@@ -1063,8 +1089,23 @@ static void encode_block(int plane, int block, int blk_row, int blk_col,
         replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
                             cm->features.allow_screen_content_tools, xd),
         cm->features.reduced_tx_set_used);
+#endif
   }
-
+#if CONFIG_MSCNN
+  else {
+    // zero residue
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
+    int dstResidue_stride = pd->dstResidue.stride;
+    int32_t *residuePtr = (int32_t *)dstResidue;
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr[r * dstResidue_stride + c] = 0;
+      }
+    }
+  }
+#endif
   // TODO(debargha, jingning): Temporarily disable txk_type check for eob=0
   // case. It is possible that certain collision in hash index would cause
   // the assertion failure. To further optimize the rate-distortion
@@ -1243,7 +1284,12 @@ static void encode_block_pass1(int plane, int block, int blk_row, int blk_col,
 
   uint16_t *dst;
   dst = &pd->dst.buf[(blk_row * pd->dst.stride + blk_col) << MI_SIZE_LOG2];
-
+#if CONFIG_MSCNN
+  int dstResidueStride = pd->dstResidue.stride;
+  uint16_t *dstResidue =
+      &pd->dstResidue
+           .buf[(blk_row * dstResidueStride + blk_col) << MI_SIZE_LOG2];
+#endif
   TxfmParam txfm_param;
   QUANT_PARAM quant_param;
 
@@ -1257,7 +1303,34 @@ static void encode_block_pass1(int plane, int block, int blk_row, int blk_col,
 
   if (p->eobs[block] > 0) {
     txfm_param.eob = p->eobs[block];
+#if CONFIG_MSCNN
+    uint16_t *predPtr = dst;
+    int dstStride = pd->dst.stride;
+
+    DECLARE_ALIGNED(16, uint16_t,
+                    pred[MAX_TX_SQUARE]);  
+    int pred_stride = MAX_TX_SIZE;
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        pred[r * pred_stride + c] = predPtr[r * dstStride + c];
+      }
+    }
+#endif
     av1_highbd_inv_txfm_add(dqcoeff, dst, pd->dst.stride, &txfm_param);
+#if CONFIG_MSCNN
+    int32_t *residuePtr = (int32_t *)dstResidue;
+    uint16_t *recon = dst;
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr[r * dstResidueStride + c] =
+            (int32_t)(recon[r * dstStride + c]) -
+            (int32_t)(pred[r * pred_stride + c]);
+      }
+    }
+#endif
   }
 }
 
@@ -1290,7 +1363,62 @@ void av1_encode_sb(const struct AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bsize,
                             xd->tree_type, &mbmi->chroma_ref_info, plane_start,
                             plane_end);
   }
+#if CONFIG_MSCNN
+  if (x->txfm_search_info.skip_txfm) {  // zero residue
+    const AV1_COMMON *const cm = &cpi->common;
+    const int num_planes = av1_num_planes(cm);
+    for (int plane = 0; plane < num_planes; ++plane) {
+      const struct macroblockd_plane *const pd = &xd->plane[plane];
+      const int subsampling_x = pd->subsampling_x;
+      const int subsampling_y = pd->subsampling_y;
+      if (plane && !xd->is_chroma_ref) break;
+      const BLOCK_SIZE plane_bsize =
+          get_plane_block_size(bsize, subsampling_x, subsampling_y);
+      assert(plane_bsize < BLOCK_SIZES_ALL);
+      const int mi_width = mi_size_wide[plane_bsize];
+      const int mi_height = mi_size_high[plane_bsize];
+      const TX_SIZE max_tx_size = get_vartx_max_txsize(xd, plane_bsize, plane);
+      const BLOCK_SIZE txb_size = txsize_to_bsize[max_tx_size];
+      const int bw = mi_size_wide[txb_size];
+      const int bh = mi_size_high[txb_size];
+      const BLOCK_SIZE max_unit_bsize =
+          get_plane_block_size(BLOCK_64X64, subsampling_x, subsampling_y);
+      int mu_blocks_wide = mi_size_wide[max_unit_bsize];
+      int mu_blocks_high = mi_size_high[max_unit_bsize];
+      mu_blocks_wide = AOMMIN(mi_width, mu_blocks_wide);
+      mu_blocks_high = AOMMIN(mi_height, mu_blocks_high);
+
+      for (int idy = 0; idy < mi_height; idy += mu_blocks_high) {
+        for (int idx = 0; idx < mi_width; idx += mu_blocks_wide) {
+          int blk_row, blk_col;
+          const int unit_height = AOMMIN(mu_blocks_high + idy, mi_height);
+          const int unit_width = AOMMIN(mu_blocks_wide + idx, mi_width);
+          for (blk_row = idy; blk_row < unit_height; blk_row += bh) {
+            for (blk_col = idx; blk_col < unit_width; blk_col += bw) {
+              int w = tx_size_wide[max_tx_size];
+              int h = tx_size_high[max_tx_size];
+              int dstResidue_stride = pd->dstResidue.stride;
+              uint16_t *dstResidue =
+                  &pd->dstResidue.buf[(blk_row * dstResidue_stride + blk_col)
+                                      << MI_SIZE_LOG2];
+
+              int32_t *residuePtr = (int32_t *)dstResidue;
+              for (int r0 = 0; r0 < h; ++r0) {
+                for (int c = 0; c < w; ++c) {
+                  // residue
+                  residuePtr[r0 * dstResidue_stride + c] = 0;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return;
+  }
+#else
   if (x->txfm_search_info.skip_txfm) return;
+#endif
 
   struct optimize_ctx ctx;
   struct encode_b_args arg = {
@@ -1401,6 +1529,12 @@ void av1_encode_block_intra(int plane, int block, int blk_row, int blk_col,
   const int dst_stride = pd->dst.stride;
   uint16_t *dst =
       &pd->dst.buf[(blk_row * dst_stride + blk_col) << MI_SIZE_LOG2];
+#if CONFIG_MSCNN
+  const int dstResidue_stride = pd->dstResidue.stride;
+  uint16_t *dstResidue =
+      &pd->dstResidue
+           .buf[(blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2];
+#endif
   int dummy_rate_cost = 0;
 
   av1_predict_intra_block_facade(cm, xd, plane, blk_col, blk_row, tx_size);
@@ -1594,13 +1728,36 @@ void av1_encode_block_intra(int plane, int block, int blk_row, int blk_col,
   }
 
   if (*eob) {
+#if CONFIG_MSCNN
+    av1_inverse_transform_block(
+        xd, dqcoeff, plane, tx_type, tx_size, dst, dst_stride, 
+        dstResidue, dstResidue_stride, *eob,
+        replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                            cm->features.allow_screen_content_tools, xd),
+        cm->features.reduced_tx_set_used);
+#else
     av1_inverse_transform_block(
         xd, dqcoeff, plane, tx_type, tx_size, dst, dst_stride, *eob,
         replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
                             cm->features.allow_screen_content_tools, xd),
         cm->features.reduced_tx_set_used);
+#endif
   }
+#if CONFIG_MSCNN
+  else {
+    // zero residue
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
 
+    int32_t *residuePtr = (int32_t *)dstResidue;
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr[r * dstResidue_stride + c] = 0;
+      }
+    }
+  }
+#endif
   // TODO(jingning): Temporarily disable txk_type check for eob=0 case.
   // It is possible that certain collision in hash index would cause
   // the assertion failure. To further optimize the rate-distortion
@@ -1766,7 +1923,15 @@ void av1_encode_block_intra_joint_uv(int block, int blk_row, int blk_col,
   uint16_t *dst_c2 =
       &pd_c2->dst.buf[(blk_row * dst_stride + blk_col) << MI_SIZE_LOG2];
   int dummy_rate_cost = 0;
-
+#if CONFIG_MSCNN
+  const int dstResidue_stride = pd_c1->dstResidue.stride;
+  uint16_t *dstResidue_c1 =
+      &pd_c1->dstResidue
+           .buf[(blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2];
+  uint16_t *dstResidue_c2 =
+      &pd_c2->dstResidue
+           .buf[(blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2];
+#endif
   av1_predict_intra_block_facade(cm, xd, AOM_PLANE_U, blk_col, blk_row,
                                  tx_size);
   av1_predict_intra_block_facade(cm, xd, AOM_PLANE_V, blk_col, blk_row,
@@ -1942,6 +2107,20 @@ void av1_encode_block_intra_joint_uv(int block, int blk_row, int blk_col,
   if (*eob_c1 || *eob_c2) {
     av1_inv_cross_chroma_tx_block(dqcoeff_c1, dqcoeff_c2, tx_size, cctx_type,
                                   xd->bd);
+#if CONFIG_MSCNN
+    av1_inverse_transform_block(
+        xd, dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, dst_c1, dst_stride, dstResidue_c1, dstResidue_stride,
+        AOMMAX(*eob_c1, *eob_c2),
+        replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                            cm->features.allow_screen_content_tools, xd),
+        cm->features.reduced_tx_set_used);
+    av1_inverse_transform_block(
+        xd, dqcoeff_c2, AOM_PLANE_V, tx_type, tx_size, dst_c2, dst_stride, dstResidue_c2, dstResidue_stride,
+        AOMMAX(*eob_c1, *eob_c2),
+        replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
+                            cm->features.allow_screen_content_tools, xd),
+        cm->features.reduced_tx_set_used);
+#else
     av1_inverse_transform_block(
         xd, dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, dst_c1, dst_stride,
         AOMMAX(*eob_c1, *eob_c2),
@@ -1954,7 +2133,25 @@ void av1_encode_block_intra_joint_uv(int block, int blk_row, int blk_col,
         replace_adst_by_ddt(cm->seq_params.enable_inter_ddt,
                             cm->features.allow_screen_content_tools, xd),
         cm->features.reduced_tx_set_used);
+#endif                                  
   }
+#if CONFIG_MSCNN
+  else {
+    // zero residue
+    int w = tx_size_wide[tx_size];
+    int h = tx_size_high[tx_size];
+
+    int32_t *residuePtr_c1 = (int32_t *)dstResidue_c1;
+    int32_t *residuePtr_c2 = (int32_t *)dstResidue_c2;
+    for (int r = 0; r < h; ++r) {
+      for (int c = 0; c < w; ++c) {
+        // residue
+        residuePtr_c1[r * dstResidue_stride + c] = 0;
+        residuePtr_c2[r * dstResidue_stride + c] = 0;
+      }
+    }
+  }
+#endif
 
   if (args->dry_run == OUTPUT_ENABLED) {
     if (*eob_c1 == 0)

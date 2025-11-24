@@ -15,6 +15,7 @@
 
 #include "aom/aom_frame_buffer.h"
 #include "aom/aom_integer.h"
+#include "config/aom_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,10 @@ typedef struct InternalFrameBufferList {
 
 // Initializes |list|. Returns 0 on success.
 int av1_alloc_internal_frame_buffers(InternalFrameBufferList *list);
+
+#if CONFIG_MSCNN
+int av1_alloc_internal_frame_buffers_residue(InternalFrameBufferList *list);
+#endif
 
 // Free any data allocated to the frame buffers.
 void av1_free_internal_frame_buffers(InternalFrameBufferList *list);
