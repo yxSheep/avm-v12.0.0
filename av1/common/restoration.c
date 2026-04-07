@@ -2411,6 +2411,9 @@ void av1_loop_restoration_filter_frame_init(AV1LrStruct *lr_ctxt,
                                             YV12_BUFFER_CONFIG *frame,
                                             AV1_COMMON *cm, int optimized_lr,
                                             int num_planes) {
+#if CONFIG_MY_GUIDED_CNN
+  cm->is_use_lr = true;
+#endif                                      
   const SequenceHeader *const seq_params = &cm->seq_params;
   const int bit_depth = seq_params->bit_depth;
   lr_ctxt->dst = &cm->rst_frame;

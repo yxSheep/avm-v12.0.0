@@ -499,6 +499,19 @@ typedef struct {
 
 /*!\cond */
 
+#if CONFIG_MY_GUIDED_CNN
+typedef struct {
+  int unit_index;
+  int unit_size;
+  int mode_info_length;
+  int unit_info_length;
+  int *use_res_cb;
+  AdpUnitInfo *unit_info;
+  AdpModeInfo *mode_info;
+  int signaled;
+} AdpGuidedInfo;
+#endif
+
 // Clips scale_x to allowed range of Wienerns filter taps.
 static INLINE int16_t clip_to_wienerns_range(int16_t scale_x, int16_t minv,
                                              int16_t n) {

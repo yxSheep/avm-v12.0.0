@@ -47,6 +47,11 @@
 #include "av1/encoder/tokenize.h"
 #include "av1/encoder/trellis_quant.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/guided_codebook.h"
+#include "av1/common/nn_loopfilter.h"
+#endif
+
 #define RD_THRESH_POW 1.25
 
 #define RD_THRESH_MUL 4.40
@@ -620,6 +625,52 @@ void av1_fill_mode_rates(AV1_COMMON *const cm, ModeCosts *mode_costs,
     }
   }
 }
+
+#if CONFIG_MY_CNN
+void av1_fill_cnn_rates(ModeCosts *mode_costs, FRAME_CONTEXT *fc,
+                        const int qp_index, const int bit_depth) {
+#if CONFIG_MY_GUIDED_CNN
+  av1_cost_tokens_from_cdf(mode_costs->cnn_guided_mode_costs,
+                           fc->cnn_guided_mode_cdf, 3, NULL);
+
+  for (int i = 0; i < 2; ++i) {
+    av1_cost_tokens_from_cdf(mode_costs->cnn_guided_norestore_cost[i],
+                             fc->cnn_guided_norestore_cdf[i], 2, NULL);
+  }
+#endif
+
+#if CONFIG_MY_GUIDED_USING_CODEBOOK
+  int qp_idx = 0;
+  for (int c_idx = 0; c_idx < CODEBOOK_CHANNEL; c_idx++) {
+    // intra
+    qp_idx = get_qp_idx(qp_index, 1, bit_depth);
+    // level 1
+    int nsymbs = get_codebook_nsymbs(qp_idx, c_idx, 1, 0);
+    av1_cost_tokens_from_cdf(
+        mode_costs->intra_cnn_guided_codebook_index_costs[0][c_idx],
+        fc->intra_cnn_guided_codebook_cdf[qp_idx][c_idx], nsymbs, NULL);
+    // level 2
+    nsymbs = get_codebook_nsymbs(qp_idx, c_idx, 1, 1);
+    av1_cost_tokens_from_cdf(
+        mode_costs->intra_cnn_guided_codebook_index_costs[1][c_idx],
+        fc->intra_res_cnn_guided_codebook_cdf[qp_idx][c_idx], nsymbs, NULL);
+
+    // inter
+    qp_idx = get_qp_idx(qp_index, 0, bit_depth);
+    // level 1
+    nsymbs = get_codebook_nsymbs(qp_idx, c_idx, 0, 0);
+    av1_cost_tokens_from_cdf(
+        mode_costs->inter_cnn_guided_codebook_index_costs[0][c_idx],
+        fc->inter_cnn_guided_codebook_cdf[qp_idx][c_idx], nsymbs, NULL);
+    // level 2
+    nsymbs = get_codebook_nsymbs(qp_idx, c_idx, 0, 1);
+    av1_cost_tokens_from_cdf(
+        mode_costs->inter_cnn_guided_codebook_index_costs[1][c_idx],
+        fc->inter_res_cnn_guided_codebook_cdf[qp_idx][c_idx], nsymbs, NULL);
+  }
+#endif
+}
+#endif
 
 void av1_fill_lr_rates(ModeCosts *mode_costs, FRAME_CONTEXT *fc) {
   for (int c = 0; c < MAX_LR_FLEX_SWITCHABLE_BITS; ++c)
@@ -1803,7 +1854,12 @@ void av1_setup_pred_block(const MACROBLOCKD *xd,
                      i ? src->uv_crop_height : src->y_crop_height,
                      dst[i].stride, mi_row, mi_col, i ? scale_uv : scale,
                      xd->plane[i].subsampling_x, xd->plane[i].subsampling_y,
-                     &xd->mi[0]->chroma_ref_info);
+                     &xd->mi[0]->chroma_ref_info
+// #if CONFIG_MSCNN // TODOINTER
+//                      ,
+//                      i, src->border
+// #endif
+    );
   }
 }
 

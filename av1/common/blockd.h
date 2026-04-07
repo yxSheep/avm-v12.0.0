@@ -1563,6 +1563,16 @@ typedef struct macroblockd_plane {
 #endif
 } MACROBLOCKD_PLANE;
 
+#if CONFIG_MY_GUIDED_CNN
+typedef struct {
+  int xqd[3];
+} AdpUnitInfo;
+
+typedef struct {
+  int mode;
+} AdpModeInfo;
+#endif
+
 #define BLOCK_OFFSET(i) ((i) << 4)
 
 #define LR_BANK_SIZE 4

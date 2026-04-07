@@ -927,7 +927,7 @@ static AOM_INLINE void inverse_transform_block_facade(
   const int dstResidue_stride = pd->dstResidue.stride;
   uint16_t *dstResidue =
       &pd->dstResidue
-           .buf[(blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2];
+           .buf[((blk_row * dstResidue_stride + blk_col) << MI_SIZE_LOG2)]; // TODOCNN
 
   av1_inverse_transform_block(xd, dqcoeff, plane, tx_type, tx_size, dst,
                               dst_stride, dstResidue, dstResidue_stride, eob,
@@ -1119,11 +1119,11 @@ static INLINE int64_t dist_block_px_domain(const AV1_COMP *cpi, MACROBLOCK *x,
                       is_reduced_tx_set_used(&cpi->common, plane_type));
 #if CONFIG_MSCNN
   uint16_t *residue;
-  DECLARE_ALIGNED(32, int32_t, residue32[MAX_TX_SQUARE]);
-  residue = (uint16_t *)residue32;
+  DECLARE_ALIGNED(16, uint16_t, residue16[MAX_TX_SQUARE]);
+  residue = residue16;
   av1_inverse_transform_block(
-      xd, dqcoeff, plane, tx_type, tx_size, recon, MAX_TX_SIZE, 
-      residue, MAX_TX_SIZE, eob,
+      xd, dqcoeff, plane, tx_type, tx_size, recon, MAX_TX_SIZE, residue,
+      MAX_TX_SIZE, eob,
       replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
                           cpi->common.features.allow_screen_content_tools, xd),
       cpi->common.features.reduced_tx_set_used);
@@ -1195,17 +1195,19 @@ static INLINE int64_t joint_uv_dist_block_px_domain(const AV1_COMP *cpi,
   av1_inv_cross_chroma_tx_block(tmp_dqcoeff_c1, tmp_dqcoeff_c2, tx_size,
                                 cctx_type, xd->bd);
 #if CONFIG_MSCNN
-  uint16_t *residue_c1 = (uint16_t *)aom_memalign(32, MAX_TX_SQUARE * sizeof(uint32_t));
-  uint16_t *residue_c2 = (uint16_t *)aom_memalign(32, MAX_TX_SQUARE * sizeof(uint32_t));
+  uint16_t *residue_c1 =
+      (uint16_t *)aom_memalign(16, MAX_TX_SQUARE * sizeof(uint16_t));
+  uint16_t *residue_c2 =
+      (uint16_t *)aom_memalign(16, MAX_TX_SQUARE * sizeof(uint16_t));
   av1_inverse_transform_block(
-      xd, tmp_dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, recon_c1, MAX_TX_SIZE, residue_c1, MAX_TX_SIZE,
-      max_chroma_eob,
+      xd, tmp_dqcoeff_c1, AOM_PLANE_U, tx_type, tx_size, recon_c1, MAX_TX_SIZE,
+      residue_c1, MAX_TX_SIZE, max_chroma_eob,
       replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
                           cpi->common.features.allow_screen_content_tools, xd),
       cpi->common.features.reduced_tx_set_used);
   av1_inverse_transform_block(
-      xd, tmp_dqcoeff_c2, AOM_PLANE_V, tx_type, tx_size, recon_c2, MAX_TX_SIZE, residue_c2, MAX_TX_SIZE,
-      max_chroma_eob,
+      xd, tmp_dqcoeff_c2, AOM_PLANE_V, tx_type, tx_size, recon_c2, MAX_TX_SIZE,
+      residue_c2, MAX_TX_SIZE, max_chroma_eob,
       replace_adst_by_ddt(cpi->common.seq_params.enable_inter_ddt,
                           cpi->common.features.allow_screen_content_tools, xd),
       cpi->common.features.reduced_tx_set_used);

@@ -230,6 +230,7 @@ static std::unique_ptr<tflite::Interpreter> get_tflite_interpreter(
   }
 #if USE_XNNPACK
   if (interpreter->ModifyGraphWithDelegate(xnnpack_delegate) != kTfLiteOk) {
+    std::cout << "3" << std::endl; // PCNN
     reporter->Report("Failed at modifying graph with XNNPack delegate");
     return nullptr;
   }

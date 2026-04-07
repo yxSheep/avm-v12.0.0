@@ -80,6 +80,7 @@
 
 // Create a temporary frame for the loop filter
 static YV12_BUFFER_CONFIG nn_dblk_input;
+static YV12_BUFFER_CONFIG bs_buffer;  // TODOCNN 分配内存
 #endif
 
 #define AOM_MIN_THREADS_PER_TILE 1
@@ -398,11 +399,11 @@ static AOM_INLINE void predict_and_reconstruct_intra_block(
       struct macroblockd_plane *const pd = &xd->plane[plane];
       uint16_t *dst =
           &pd->dst.buf[(row * pd->dst.stride + col) << MI_SIZE_LOG2];
-#if CONFIG_MSCNN
+#if CONFIG_MSCNN  // TODOCNN
       zeroResidue = false;
       uint16_t *dstResidue =
           &pd->dstResidue
-               .buf[(row * pd->dstResidue.stride + col) << MI_SIZE_LOG2];
+               .buf[((row * pd->dstResidue.stride + col) << MI_SIZE_LOG2)];
       inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst,
                               pd->dst.stride, dstResidue, pd->dstResidue.stride,
                               reduced_tx_set_used);
@@ -420,8 +421,8 @@ static AOM_INLINE void predict_and_reconstruct_intra_block(
     struct macroblockd_plane *const pd = &xd->plane[plane];
     int dstResidue_stride = pd->dstResidue.stride;
     uint16_t *dstResidue =
-        &pd->dstResidue.buf[(row * dstResidue_stride + col) << MI_SIZE_LOG2];
-    int32_t *residuePtr = (int32_t *)dstResidue;
+        &pd->dstResidue.buf[((row * dstResidue_stride + col) << MI_SIZE_LOG2)];  // TODOCNN
+    uint16_t *residuePtr = dstResidue;
     for (int r0 = 0; r0 < h; ++r0) {
       for (int c = 0; c < w; ++c) {
         // residue
@@ -492,10 +493,10 @@ static AOM_INLINE void inverse_transform_inter_block(
 
   uint16_t *dst =
       &pd->dst.buf[(blk_row * pd->dst.stride + blk_col) << MI_SIZE_LOG2];
-#if CONFIG_MSCNN
+#if CONFIG_MSCNN  // TODOCNN
   uint16_t *dstResidue =
       &pd->dstResidue
-           .buf[(blk_row * pd->dstResidue.stride + blk_col) << MI_SIZE_LOG2];
+           .buf[((blk_row * pd->dstResidue.stride + blk_col) << MI_SIZE_LOG2)];
   inverse_transform_block(dcb, cm, plane, tx_type, tx_size, dst, pd->dst.stride,
                           dstResidue, pd->dstResidue.stride,
                           reduced_tx_set_used);
@@ -1329,7 +1330,7 @@ static AOM_INLINE void decode_token_recon_block(AV1Decoder *const pbi,
                               xd->tree_type, &mbmi->chroma_ref_info,
                               plane_start, plane_end);
     td->predict_inter_block_visit(cm, dcb, bsize);
-    int FLAGCNN = true; // TODOCNN zero residue?
+    int FLAGCNN = true;  // TODOCNN zero residue?
     // Reconstruction
     if (!mbmi->skip_txfm[xd->tree_type == CHROMA_PART]) {
       FLAGCNN = false;
@@ -1467,7 +1468,7 @@ static AOM_INLINE void decode_token_recon_block(AV1Decoder *const pbi,
                               plane_start, plane_end);
     }
 #if CONFIG_MSCNN
-    if (FLAGCNN) { // zero residue
+    if (FLAGCNN) {  // zero residue
       const int max_blocks_wide = max_block_wide(xd, bsize, 0);
       const int max_blocks_high = max_block_high(xd, bsize, 0);
       int row, col;
@@ -1509,13 +1510,13 @@ static AOM_INLINE void decode_token_recon_block(AV1Decoder *const pbi,
                 int h = tx_size_high[max_tx_size];
                 int dstResidue_stride = pd->dstResidue.stride;
                 uint16_t *dstResidue =
-                    &pd->dstResidue.buf[(blk_row * dstResidue_stride + blk_col)
-                                        << MI_SIZE_LOG2];
+                    &pd->dstResidue.buf[((blk_row * dstResidue_stride + blk_col)
+                                         << MI_SIZE_LOG2)];  // TODOCNN
 
-                int32_t *residuePtr = (int32_t *)dstResidue;
+                uint16_t *residuePtr = dstResidue;
                 for (int r0 = 0; r0 < h; ++r0) {
                   for (int c = 0; c < w; ++c) {
-                    //// residue
+                    // residue
                     residuePtr[r0 * dstResidue_stride + c] = 0;
                   }
                 }
@@ -4364,8 +4365,8 @@ static AOM_INLINE void setup_buffer_pool(AV1_COMMON *cm) {
 #if CONFIG_MSCNN
   BufferPool *const pool_residue =
       cm->buffer_pool_residue;  // TODOCNN 逻辑是这样的吗
-      lock_buffer_pool(pool_residue);
-  if (aom_realloc_residue_frame_buffer(
+  lock_buffer_pool(pool_residue);
+  if (aom_realloc_frame_buffer(
           &cm->cur_frame_residue->buf, cm->width, cm->height,
           seq_params->subsampling_x, seq_params->subsampling_y,
           AOM_DEC_BORDER_IN_PIXELS, cm->features.byte_alignment,
@@ -8280,7 +8281,7 @@ static int read_uncompressed_header(AV1Decoder *pbi,
 #if CONFIG_MSCNN
   BufferPool *const pool_residue = cm->buffer_pool_residue;
   RefCntBuffer *const frame_bufs_residue = pool_residue->frame_bufs;
-  (void)frame_bufs_residue; 
+  (void)frame_bufs_residue;
 #endif
   aom_s_frame_info *sframe_info = &pbi->sframe_info;
   sframe_info->is_s_frame = 0;
@@ -8942,7 +8943,7 @@ static int read_uncompressed_header(AV1Decoder *pbi,
       }
       RefCntBuffer *buf_residue = &frame_bufs_residue[buf_idx_residue];
       lock_buffer_pool(pool_residue);
-      if (aom_realloc_residue_frame_buffer(
+      if (aom_realloc_frame_buffer(
               &buf_residue->buf, seq_params->max_frame_width,
               seq_params->max_frame_height, seq_params->subsampling_x,
               seq_params->subsampling_y, AOM_BORDER_IN_PIXELS,
@@ -9590,7 +9591,8 @@ static int read_uncompressed_header(AV1Decoder *pbi,
     }
     features->refresh_frame_context = REFRESH_FRAME_CONTEXT_DISABLED;
     features->disable_cdf_update = 1;
-#if CONFIG_MSCNN // TODOCNN 下面的 cm->nn_loopfilter_info.nn_loopfilter_enable = 0; 还需要加吗
+#if CONFIG_MSCNN  // TODOCNN 下面的 cm->nn_loopfilter_info.nn_loopfilter_enable
+                  // = 0; 还需要加吗
     cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
 #endif
 #if CONFIG_CWG_F317
@@ -10586,14 +10588,13 @@ void decoder_avg_tiles_cdfs(AV1Decoder *const pbi) {
 
 void av1_gdf_frame_dec(AV1_COMMON *cm) { gdf_filter_frame(cm); }
 
-#if CONFIG_MSCNN  // TODOCNN 参数类型需要换成uint16_t *吗
+#if CONFIG_MSCNN && 000  // TODOCNN 参数类型需要换成uint16_t *吗
 void nn_loopfilter_frame(AV1Decoder *pbi, const uint8_t *data,
                          const uint8_t *data_end, const uint8_t **p_data_end,
                          int start_tile, int end_tile, int initialize_flag) {
   AV1_COMMON *const cm = &pbi->common;
 
   if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
-
     // Create a temporary frame for the loop filter
     YV12_BUFFER_CONFIG *buffer = &pbi->common.cur_frame->buf;
 
@@ -10610,9 +10611,8 @@ void nn_loopfilter_frame(AV1Decoder *pbi, const uint8_t *data,
                            buffer->y_crop_height, buffer->subsampling_x,
                            buffer->subsampling_y, buffer->border, 0, false);
     aom_yv12_copy_frame(&nnlf_frame, &nn_pred_input, 3);
-    
-    buffer = NULL;
 
+    buffer = NULL;
 
     if (frame_is_intra_only(cm))
       nn_loopfilter(&nnlf_frame, &pbi->common.cur_frame_residue->buf,
@@ -10800,7 +10800,7 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
       } else {
 #if CONFIG_MSCNN
         av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf,
-                              cm, &pbi->dcb.xd, 0, num_planes, 0);
+                              &bs_buffer, cm, &pbi->dcb.xd, 0, num_planes, 0);
 #else
         av1_loop_filter_frame(&cm->cur_frame->buf, cm, &pbi->dcb.xd, 0,
                               num_planes, 0);
@@ -10880,12 +10880,12 @@ void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, const uint8_t *data,
 #endif
         }
       }
-#if CONFIG_MSCNN
+#if CONFIG_MSCNN && 000
       nn_loopfilter_frame(pbi, data, data_end, p_data_end, start_tile, end_tile,
                           initialize_flag);
 #endif
 #if CONFIG_MSCNN
-      aom_free_frame_buffer(&nn_dblk_input); // TODOCNN 需要释放吗
+      aom_free_frame_buffer(&nn_dblk_input);  // TODOCNN 需要释放吗
 #endif
       if (use_ccso) {
         if (pbi->num_workers > 1

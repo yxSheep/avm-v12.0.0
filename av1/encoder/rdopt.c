@@ -8747,7 +8747,7 @@ void av1_rd_pick_inter_mode_sb(struct AV1_COMP *cpi,
 
   // Temporary buffers used by handle_inter_mode().
   uint16_t *const tmp_buf = x->tmp_pred_bufs[0];
-#if CONFIG_MSCNN
+#if CONFIG_MSCNN // TODOCNN int32
   uint16_t *const tmpResidue_buf = x->tmpResidue_bufs[0];
 #endif
   // The best RD found for the reference frame, among single reference modes.

@@ -35,6 +35,14 @@ static int q_first[DBL_REG_DECIS_LEN] = { 45, 43, 40, 35, 32 };
 
 #define SEC_DERIV_ARRAY_LEN (MAX_DBL_FLT_LEN + 1) * 2
 
+// #if CONFIG_MSCNN
+// #define CNN_MAX_DBL_FLT_LEN 12
+// static const int bs_q_map_8bit[CNN_MAX_DBL_FLT_LEN] = { 0, 85, 170, 255, 0, 170,
+//                                                     0, 0,  0,   255, 0, 0 };
+// static const int bs_q_map_10bit[CNN_MAX_DBL_FLT_LEN] = { 0, 341, 682, 1023, 0, 341,
+//                                                      0, 0,   0,   1023, 0, 0 };
+// #endif
+
 // Determining number of samples to be modified for the current row/column
 static INLINE int filt_choice_highbd(uint16_t *s, int pitch, int max_filt_neg,
                                      int max_filt_pos, uint16_t q_thresh,

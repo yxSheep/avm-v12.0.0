@@ -43,7 +43,9 @@ int av1_alloc_internal_frame_buffers_residue(InternalFrameBufferList *list) {
   // and these frames use film grain synthesis, the total number of required
   // frame buffers is (total references numbers + current frame) * 2 + working
   // buffers for multh-threads
-  list->num_internal_frame_buffers = 2; // TODOCNN 这里应该赋值多少
+  // list->num_internal_frame_buffers = 2; // TODOCNN 这里应该赋值多少
+  list->num_internal_frame_buffers =
+      (AOM_MAXIMUM_REF_BUFFERS + 1) * 2 + AOM_MAXIMUM_WORK_BUFFERS;
   list->int_fb = (InternalFrameBuffer *)aom_calloc(
       list->num_internal_frame_buffers, sizeof(*list->int_fb));
   if (list->int_fb == NULL) {

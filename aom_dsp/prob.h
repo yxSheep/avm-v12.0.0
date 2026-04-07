@@ -735,7 +735,7 @@ static INLINE unsigned od_ec_prob_scale(uint16_t p, unsigned r, int n,
 // od_ec_prob_scale()
 static INLINE unsigned get_adjusted_prob(uint16_t p, int n, int nsym) {
   int adj_prob = (p >> EC_PROB_SHIFT) << EC_PROB_SHIFT;
-  int inc = av1_prob_inc_tbl[nsym - 2][n];
+  int inc = av1_prob_inc_tbl[nsym - 2][n]; // NOTECNN nsym[2 16]
   adj_prob += inc << (EC_PROB_SHIFT - 4);
   return adj_prob;
 }

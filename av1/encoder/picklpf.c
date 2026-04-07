@@ -80,7 +80,8 @@ static int64_t try_filter_frame(const YV12_BUFFER_CONFIG *sd,
                              plane + 1, partial_frame, mt_info->workers,
                              num_workers, &mt_info->lf_row_sync);
   else
-    av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, &cpi->td.mb.e_mbd, plane,
+    av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, 
+                          &cpi->bs_buffer, cm, &cpi->td.mb.e_mbd, plane,
                           plane + 1, partial_frame);
 #else
   if (num_workers > 1)

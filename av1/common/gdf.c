@@ -542,6 +542,9 @@ void gdf_filter_frame(AV1_COMMON *cm) {
 #if CONFIG_CWG_F317
   if (cm->bridge_frame_info.is_bridge_frame) return;
 #endif  // CONFIG_CWG_F317
+#if CONFIG_MY_GUIDED_CNN
+  cm->is_use_gdf = true;
+#endif
   const int bit_depth = cm->cur_frame->buf.bit_depth;
   const int pxl_max = (1 << cm->cur_frame->buf.bit_depth) - 1;
   const int pxl_shift =

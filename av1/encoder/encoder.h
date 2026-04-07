@@ -3057,6 +3057,17 @@ typedef struct AV1_COMP {
    */
   int switch_frame_mode;
 #endif  // CONFIG_RANDOM_ACCESS_SWITCH_FRAME
+
+#if CONFIG_MSCNN
+  YV12_BUFFER_CONFIG bs_buffer;
+  YV12_BUFFER_CONFIG nn_dblk_input;
+  YV12_BUFFER_CONFIG nn_post_dblk;
+  YV12_BUFFER_CONFIG nn_post_cdef;
+  YV12_BUFFER_CONFIG nn_post_ccso;
+  YV12_BUFFER_CONFIG nn_post_lr;
+  YV12_BUFFER_CONFIG nn_post_gdf;
+  YV12_BUFFER_CONFIG cnn_out;
+#endif
 } AV1_COMP;
 
 /*!

@@ -1224,10 +1224,22 @@ typedef struct {
    */
   int dpcm_uv_vert_horz_cost[2];
   /**@}*/
-  
+
 #if CONFIG_MSCNN
   int nn_cost[2][2][2];
-#endif  
+#endif
+
+#if CONFIG_MY_GUIDED_CNN
+  int cnn_guided_mode_costs[3];
+  int cnn_guided_norestore_cost[2][2];
+#endif
+
+#if CONFIG_MY_GUIDED_USING_CODEBOOK
+  int intra_cnn_guided_codebook_index_costs[CODEBOOK_LEVEL][CODEBOOK_CHANNEL]
+                                           [256];
+  int inter_cnn_guided_codebook_index_costs[CODEBOOK_LEVEL][CODEBOOK_CHANNEL]
+                                           [256];
+#endif
 } ModeCosts;
 
 /*! \brief Holds mv costs for encoding and motion search.

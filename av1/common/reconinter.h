@@ -1030,17 +1030,22 @@ static INLINE int64_t scaled_buffer_offset(int x_offset, int y_offset,
   return (int64_t)y * stride + x;
 }
 
+// TODOINTER
+// #if CONFIG_MSCNN
+// extern YV12_BUFFER_CONFIG *getPred(int y_width, int y_height, int subsampling_x,
+//                                    int subsampling_y, int border);
+// extern struct buf_2d *getDstPred(int y_width, int y_height, int subsampling_x,
+//                                  int subsampling_y, int border);
+// #endif
+
 #if CONFIG_MSCNN
-static INLINE void setup_dst_planes(struct buf_2d *dst, uint16_t *src,
-                                    int width, int height, int crop_width,
-                                    int crop_height, int stride,
-                                    struct buf_2d *dstResidue, uint16_t *residue,
-                                    int widthResidue, int heightResidue,
-                                    int crop_widthResidue, int crop_heightResidue,  
-                                    int strideResidue, int mi_row, int mi_col,
-                                    const struct scale_factors *scale,
-                                    int subsampling_x, int subsampling_y,
-                                    const CHROMA_REF_INFO *chroma_ref_info) {
+static INLINE void setup_dst_planes(
+    struct buf_2d *dst, uint16_t *src, int width, int height, int crop_width,
+    int crop_height, int stride, struct buf_2d *dstResidue, uint16_t *residue,
+    int widthResidue, int heightResidue, int crop_widthResidue,
+    int crop_heightResidue, int strideResidue, int mi_row, int mi_col,
+    const struct scale_factors *scale, int subsampling_x, int subsampling_y,
+    const CHROMA_REF_INFO *chroma_ref_info) { // TODOINTER , int plane, int border
   // Offset the buffer pointer
   if (chroma_ref_info && (subsampling_x || subsampling_y)) {
     mi_row = chroma_ref_info->mi_row_chroma_base;
@@ -1057,7 +1062,10 @@ static INLINE void setup_dst_planes(struct buf_2d *dst, uint16_t *src,
   dst->crop_height = crop_height;
   dst->stride = stride;
 
-  assert(dstResidue!=NULL);
+  assert(dstResidue != NULL);
+  // dstResidue->buf =
+  //     (uint16_t *)((int32_t *)residue +
+  //                  scaled_buffer_offset(x, y, strideResidue, scale));
   dstResidue->buf = residue + scaled_buffer_offset(x, y, strideResidue, scale);
   dstResidue->buf0 = residue;
   dstResidue->width = widthResidue;
@@ -1065,9 +1073,60 @@ static INLINE void setup_dst_planes(struct buf_2d *dst, uint16_t *src,
   dstResidue->crop_width = crop_widthResidue;
   dstResidue->crop_height = crop_heightResidue;
   dstResidue->stride = strideResidue;
+
+// TODOINTER
+// #if CONFIG_MSCNN // delete
+//   YV12_BUFFER_CONFIG *pred =
+//       getPred(crop_width, crop_height, subsampling_x, subsampling_y, border);
+//   struct buf_2d *dst_pred =
+//       getDstPred(crop_width, crop_height, subsampling_x, subsampling_y, border);
+
+//   dst_pred->buf =
+//       pred->buffers[plane] + scaled_buffer_offset(x, y, stride, scale);
+//   dst_pred->buf0 = pred->buffers[plane];
+//   dst_pred->width = width;
+//   dst_pred->height = height;
+//   dst_pred->crop_width = crop_width;
+//   dst_pred->crop_height = crop_height;
+//   dst_pred->stride = stride;
+// #endif
+}
+
+static INLINE void setup_bs_planes(struct buf_2d *dst, uint16_t *bs, int width,
+                                   int height, int crop_width, int crop_height,
+                                   int stride, int mi_row, int mi_col,
+                                   const struct scale_factors *scale,
+                                   int subsampling_x, int subsampling_y,
+                                   const CHROMA_REF_INFO *chroma_ref_info) {
+  // Offset the buffer pointer
+  if (chroma_ref_info && (subsampling_x || subsampling_y)) {
+    mi_row = chroma_ref_info->mi_row_chroma_base;
+    mi_col = chroma_ref_info->mi_col_chroma_base;
+  }
+  const int x = (MI_SIZE * mi_col) >> subsampling_x;
+  const int y = (MI_SIZE * mi_row) >> subsampling_y;
+  dst->buf = bs + scaled_buffer_offset(x, y, stride, scale);
+  dst->buf0 = bs;
+  dst->width = width;
+  dst->height = height;
+  dst->crop_width = crop_width;
+  dst->crop_height = crop_height;
+  dst->stride = stride;
 }
 #endif
 
+#if CONFIG_MSCNN
+static INLINE void setup_pred_plane(
+    struct buf_2d *dst, uint16_t *src, int width, int height, int crop_width,
+    int crop_height, int stride, int mi_row, int mi_col,
+    const struct scale_factors *scale, int subsampling_x, int subsampling_y,
+    const CHROMA_REF_INFO *chroma_ref_info) {
+// static INLINE void setup_pred_plane( // TODOINTER
+//     struct buf_2d *dst, uint16_t *src, int width, int height, int crop_width,
+//     int crop_height, int stride, int mi_row, int mi_col,
+//     const struct scale_factors *scale, int subsampling_x, int subsampling_y,
+//     const CHROMA_REF_INFO *chroma_ref_info, int plane, int border) {
+#else
 static INLINE void setup_pred_plane(struct buf_2d *dst, uint16_t *src,
                                     int width, int height, int crop_width,
                                     int crop_height, int stride, int mi_row,
@@ -1075,6 +1134,7 @@ static INLINE void setup_pred_plane(struct buf_2d *dst, uint16_t *src,
                                     const struct scale_factors *scale,
                                     int subsampling_x, int subsampling_y,
                                     const CHROMA_REF_INFO *chroma_ref_info) {
+#endif
   // Offset the buffer pointer
   if (chroma_ref_info && (subsampling_x || subsampling_y)) {
     mi_row = chroma_ref_info->mi_row_chroma_base;
@@ -1090,14 +1150,36 @@ static INLINE void setup_pred_plane(struct buf_2d *dst, uint16_t *src,
   dst->crop_width = crop_width;
   dst->crop_height = crop_height;
   dst->stride = stride;
+
+// TODOINTER
+// #if CONFIG_MSCNN  // delete
+//   YV12_BUFFER_CONFIG *pred =
+//       getPred(crop_width, crop_height, subsampling_x, subsampling_y, border);
+//   struct buf_2d *dst_pred =
+//       getDstPred(crop_width, crop_height, subsampling_x, subsampling_y, border);
+
+//   dst_pred->buf =
+//       pred->buffers[plane] + scaled_buffer_offset(x, y, stride, scale);
+//   dst_pred->buf0 = pred->buffers[plane];
+//   dst_pred->width = width;
+//   dst_pred->height = height;
+//   dst_pred->crop_width = crop_width;
+//   dst_pred->crop_height = crop_height;
+//   dst_pred->stride = stride;
+// #endif
 }
 
 #if CONFIG_MSCNN
 void av1_setup_dst_planes(struct macroblockd_plane *planes,
-                          const YV12_BUFFER_CONFIG *src, 
-                          const YV12_BUFFER_CONFIG *residue, int mi_row, int mi_col,
-                          const int plane_start, const int plane_end,
+                          const YV12_BUFFER_CONFIG *src,
+                          const YV12_BUFFER_CONFIG *residue, int mi_row,
+                          int mi_col, const int plane_start,
+                          const int plane_end,
                           const CHROMA_REF_INFO *chroma_ref_info);
+void av1_setup_bs_planes(struct buf_2d *bs_block_buf,
+                         const YV12_BUFFER_CONFIG *bs, int mi_row, int mi_col,
+                         const int plane_start, const int plane_end,
+                         const CHROMA_REF_INFO *chroma_ref_info);
 #else
 void av1_setup_dst_planes(struct macroblockd_plane *planes,
                           const YV12_BUFFER_CONFIG *src, int mi_row, int mi_col,
@@ -1126,7 +1208,12 @@ static AOM_INLINE void setup_pred_planes_for_tip(const TIP *tip_ref,
                        ref_buf->crop_widths[is_uv],
                        ref_buf->crop_heights[is_uv], ref_buf->strides[is_uv],
                        mi_row, mi_col, tip_ref->ref_scale_factor[ref],
-                       pd->subsampling_x, pd->subsampling_y, NULL);
+                       pd->subsampling_x, pd->subsampling_y, NULL
+// #if CONFIG_MSCNN // TODOINTER
+//                        ,
+//                        plane, ref_buf->border
+// #endif
+      );
     }
   }
 }

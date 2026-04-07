@@ -391,15 +391,17 @@ static int realloc_residue_frame_buffer_aligned(
     ybf->subsampling_y = ss_y;
 
     // Store uint16 addresses when using 16bit framebuffers
-    buf = (uint16_t *)ybf->buffer_alloc; // TODOCNN 需要加CONVERT_INT32PTR_TO_UINT16PTR吗
+    buf =
+        (uint16_t *)
+            ybf->buffer_alloc;  // TODOCNN 需要加CONVERT_INT32PTR_TO_UINT16PTR吗
 
     ybf->y_buffer = (uint16_t *)aom_align_addr(
-        buf + (border * y_stride) + border, aom_byte_align);
+        (buf) + (border * y_stride) + border, aom_byte_align);
     ybf->u_buffer = (uint16_t *)aom_align_addr(
-        buf + yplane_size + (uv_border_h * uv_stride) + uv_border_w,
+        (buf) + yplane_size + (uv_border_h * uv_stride) + uv_border_w,
         aom_byte_align);
     ybf->v_buffer =
-        (uint16_t *)aom_align_addr(buf + yplane_size + uvplane_size +
+        (uint16_t *)aom_align_addr((buf) + yplane_size + uvplane_size +
                                        (uv_border_h * uv_stride) + uv_border_w,
                                    aom_byte_align);
 
@@ -428,11 +430,12 @@ static int realloc_residue_frame_buffer_aligned(
   return AOM_CODEC_MEM_ERROR;
 }
 
-int aom_realloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
-                             int ss_x, int ss_y, int border, int byte_alignment,
-                             aom_codec_frame_buffer_t *fb,
-                             aom_get_frame_buffer_cb_fn_t cb, void *cb_priv,
-                             bool alloc_pyramid) {
+int aom_realloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width,
+                                     int height, int ss_x, int ss_y, int border,
+                                     int byte_alignment,
+                                     aom_codec_frame_buffer_t *fb,
+                                     aom_get_frame_buffer_cb_fn_t cb,
+                                     void *cb_priv, bool alloc_pyramid) {
 #if CONFIG_SIZE_LIMIT
   if (width > DECODE_WIDTH_LIMIT || height > DECODE_HEIGHT_LIMIT)
     return AOM_CODEC_MEM_ERROR;
@@ -463,14 +466,14 @@ int aom_realloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int hei
   return AOM_CODEC_MEM_ERROR;
 }
 
-int aom_alloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width, int height,
-                           int ss_x, int ss_y, int border, int byte_alignment,
-                           bool alloc_pyramid) {
+int aom_alloc_residue_frame_buffer(YV12_BUFFER_CONFIG *ybf, int width,
+                                   int height, int ss_x, int ss_y, int border,
+                                   int byte_alignment, bool alloc_pyramid) {
   if (ybf) {
     aom_free_frame_buffer(ybf);
-    return aom_realloc_residue_frame_buffer(ybf, width, height, ss_x, ss_y, border,
-                                    byte_alignment, NULL, NULL, NULL,
-                                    alloc_pyramid);
+    return aom_realloc_residue_frame_buffer(ybf, width, height, ss_x, ss_y,
+                                            border, byte_alignment, NULL, NULL,
+                                            NULL, alloc_pyramid);
   }
   return AOM_CODEC_MEM_ERROR;
 }

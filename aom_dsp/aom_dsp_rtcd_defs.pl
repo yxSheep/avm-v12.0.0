@@ -176,6 +176,13 @@ specialize qw/aom_highbd_convolve8_vert sse2 avx2/;
 # Loopfilter
 #
   if (aom_config("CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS") eq "yes") {
+    if(aom_config("CONFIG_MSCNN") eq "yes") {
+      add_proto qw/void nn_aom_highbd_lpf_horizontal_generic/, "uint16_t *s, uint16_t *bs_s, int pitch, int bs_pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd, int is_lossless_neg, int is_lossless_pos";
+      add_proto qw/void nn_aom_highbd_lpf_vertical_generic/, "uint16_t *s, uint16_t *bs_s, int pitch, int bs_pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd, int is_lossless_neg, int is_lossless_pos";
+      # specialize qw/nn_aom_highbd_lpf_horizontal_generic sse4_1/;
+      # specialize qw/nn_aom_highbd_lpf_vertical_generic sse4_1/;
+    }
+
   add_proto qw/void aom_highbd_lpf_horizontal_generic/, "uint16_t *s, int pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd, int is_lossless_neg, int is_lossless_pos";
 
   specialize qw/aom_highbd_lpf_horizontal_generic sse4_1/;
@@ -184,6 +191,13 @@ specialize qw/aom_highbd_convolve8_vert sse2 avx2/;
 
   specialize qw/aom_highbd_lpf_vertical_generic sse4_1/;
   } else {
+    if(aom_config("CONFIG_MSCNN") eq "yes") {
+      add_proto qw/void nn_aom_highbd_lpf_horizontal_generic/, "uint16_t *s, uint16_t *bs_s, int pitch, int bs_pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd";
+      add_proto qw/void nn_aom_highbd_lpf_vertical_generic/, "uint16_t *s, uint16_t *bs_s, int pitch, int bs_pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd";
+      # specialize qw/nn_aom_highbd_lpf_horizontal_generic sse4_1/;
+      # specialize qw/nn_aom_highbd_lpf_vertical_generic sse4_1/;
+    }
+
   add_proto qw/void aom_highbd_lpf_horizontal_generic/, "uint16_t *s, int pitch, int filt_width_neg, int filt_width_pos, const uint16_t *q_thresh, const uint16_t *side_thresh, int bd";
 
   specialize qw/aom_highbd_lpf_horizontal_generic sse4_1/;

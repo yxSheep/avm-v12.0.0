@@ -17,3 +17,4 @@ ParaKit/binaries/*
 parakit.egg-info/
 .DS_Store
 build/
+datasets/qp*

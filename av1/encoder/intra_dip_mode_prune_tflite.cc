@@ -95,7 +95,8 @@ static void ensure_tflite_init(void **context, int model_index) {
         fprintf(stderr, "Bad DIP pruning model index: %d\n", model_index);
         exit(1);
     }
-
+    // PCNN
+    std::cout << "create_interpreter(ctx, (const unsigned char *)model_bytes, model_len);" << std::endl;
     create_interpreter(ctx, (const unsigned char *)model_bytes, model_len);
 
     ctx->dip_pruning_in.inputs[0].name = "extra_features";

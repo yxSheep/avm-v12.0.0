@@ -22,6 +22,11 @@
 #include "av1/common/token_cdfs.h"
 #include "av1/common/txb_common.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/enums.h"
+#include "guided_codebook.h"
+#endif
+
 static int get_q_ctx(int q) {
   if (q <= 90) return 0;
   if (q <= 140) return 1;
@@ -278,6 +283,25 @@ void av1_reset_cdf_symbol_counters(FRAME_CONTEXT *fc) {
   RESET_CDF_COUNTER(fc->pc_wiener_restore_cdf, 2);
 #if CONFIG_MSCNN
   RESET_CDF_COUNTER(fc->nn_cdf, 2);
+#endif
+#if CONFIG_MY_GUIDED_CNN
+  RESET_CDF_COUNTER(fc->cnn_guided_mode_cdf, 3);
+  RESET_CDF_COUNTER(fc->cnn_guided_norestore_cdf, 2);
+
+#if CONFIG_MY_GUIDED_USING_CODEBOOK
+  for (int qp_idx = 0; qp_idx < QP_NUM; qp_idx++) {
+    for (int c_idx = 0; c_idx < CODEBOOK_CHANNEL; c_idx++) {
+      RESET_CDF_COUNTER(fc->intra_cnn_guided_codebook_cdf[qp_idx][c_idx],
+                        get_codebook_nsymbs(qp_idx, c_idx, 1, 0));
+      RESET_CDF_COUNTER(fc->inter_cnn_guided_codebook_cdf[qp_idx][c_idx],
+                        get_codebook_nsymbs(qp_idx, c_idx, 0, 0));
+      RESET_CDF_COUNTER(fc->intra_res_cnn_guided_codebook_cdf[qp_idx][c_idx],
+                        get_codebook_nsymbs(qp_idx, c_idx, 1, 1));
+      RESET_CDF_COUNTER(fc->inter_res_cnn_guided_codebook_cdf[qp_idx][c_idx],
+                        get_codebook_nsymbs(qp_idx, c_idx, 0, 1));
+    }
+  }
+#endif
 #endif
   RESET_CDF_COUNTER(fc->y_mode_set_cdf, INTRA_MODE_SETS);
   RESET_CDF_COUNTER(fc->y_mode_idx_cdf, LUMA_INTRA_MODE_INDEX_COUNT);

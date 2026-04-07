@@ -77,7 +77,6 @@ void compute_residual_stats(AV1_COMP *const cpi, ThreadData *td, MACROBLOCK *x,
 
   if (p->eobs[block]) {
     txfm_param.eob = p->eobs[block];
-
     av1_highbd_inv_txfm_add(dqcoeff, pd->dst.buf, pd->dst.stride, &txfm_param);
   }
   int sse = 0;

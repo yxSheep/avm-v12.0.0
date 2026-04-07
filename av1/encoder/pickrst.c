@@ -653,10 +653,10 @@ static int64_t count_wienerns_bits(
     skip_filter_write_for_class[c_id] = equal_ref;
     ref_for_class[c_id] = ref;
   }
-  const int(*length_cost)[2] = mode_costs->wienerns_length_cost;
+  const int (*length_cost)[2] = mode_costs->wienerns_length_cost;
   const int *uv_sym_cost = mode_costs->wienerns_uv_sym_cost;
-  const int(*cost_4part)[4] = mode_costs->wienerns_4part_cost;
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*cost_4part)[4] = mode_costs->wienerns_4part_cost;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
 
   assert(c_id_begin >= 0);
   assert(c_id_end <= WIENERNS_MAX_CLASSES);
@@ -845,7 +845,7 @@ static int64_t finer_tile_search_wienerns(
   double best_cost = RDCOST_DBL_WITH_NATIVE_BD_DIST(
       x->rdmult, best_bits >> 4, best_err, rsc->cm->seq_params.bit_depth);
 
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
   int ncoeffs1, ncoeffs2;
   int ncoeffs =
       config2ncoeffs(&nsfilter_params->nsfilter_config, &ncoeffs1, &ncoeffs2);
@@ -1920,9 +1920,9 @@ static int64_t compute_stats_for_wienerns_filter(
   memset(b, 0, sizeof(*b) * total_dim_b);
   memset(num_pixels_in_class, 0, sizeof(*num_pixels_in_class) * num_classes);
 
-  const int(*wienerns_config)[3] = nsfilter_params->nsfilter_config.config;
+  const int (*wienerns_config)[3] = nsfilter_params->nsfilter_config.config;
   int is_uv = (rui->plane != AOM_PLANE_Y);
-  const int(*wienerns_config2)[3] =
+  const int (*wienerns_config2)[3] =
       is_uv ? nsfilter_params->nsfilter_config.config2 : NULL;
   const int end_pixel = is_uv ? nsfilter_params->nsfilter_config.num_pixels +
                                     nsfilter_params->nsfilter_config.num_pixels2
@@ -4266,6 +4266,9 @@ void av1_pick_filter_restoration(const YV12_BUFFER_CONFIG *src, AV1_COMP *cpi) {
             best_cost = cost;
             best_rtype = real_r;
             best_unit_size = unit_size;
+#if CONFIG_MY_GUIDED_CNN // TODOCNN 是在这吗
+            if (plane == plane_start) cm->lr_y_rdcost = best_cost;
+#endif
             if (is_frame_filters_enabled(rsc.plane) &&
                 frame_filters_configured) {
               best_frame_filters_state = rsc.frame_filters_on;

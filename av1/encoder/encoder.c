@@ -87,12 +87,20 @@
 #include "av1/encoder/subgop.h"
 #include "av1/encoder/superres_scale.h"
 #include "av1/encoder/tpl_model.h"
+
 #if CONFIG_MSCNN
 #include "av1/common/nn_loopfilter.h"
-
+#include "av1/common/guided_adaptive_channel.h"
+#include "av1/common/enums.h"
+#include "libyuv/basic_types.h"
 // Create a temporary frame for the loop filter
-static YV12_BUFFER_CONFIG nn_dblk_input;
+// static YV12_BUFFER_CONFIG nn_dblk_input;
 #endif
+
+#if CONFIG_MAKE_DATASETS
+void nn_lf_make_datasets(AV1_COMP *cpi, AV1_COMMON *cm);
+#endif
+
 #if CONFIG_ML_PART_SPLIT
 #include "av1/encoder/part_split_prune_tflite.h"
 #endif  // CONFIG_ML_PART_SPLIT
@@ -2392,7 +2400,7 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
   }
 #if CONFIG_MSCNN
   // Reset the residue frame pointers to the current frame size.
-  if (aom_realloc_residue_frame_buffer(
+  if (aom_realloc_frame_buffer(
           &cm->cur_frame_residue->buf, cm->width, cm->height,
           seq_params->subsampling_x, seq_params->subsampling_y,
           cpi->oxcf.border_in_pixels, cm->features.byte_alignment, NULL, NULL,
@@ -2750,6 +2758,9 @@ void gdf_optimizer(AV1_COMP *cpi, AV1_COMMON *cm) {
             }
           }
           best_cost = slice_cost;
+#if CONFIG_MY_GUIDED_CNN
+          cm->gdf_y_rdcost = best_cost;
+#endif
         }
       }
     }
@@ -2786,10 +2797,63 @@ void gdf_optimize_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
   }
 }
 
-#if CONFIG_MSCNN
+#if CONFIG_MY_CNN
+static void my_nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
+                                   int *cnn_guided_mode_costs,
+                                   int (*norestore_costs)[2],
+                                   int (*codebook_costs)[CODEBOOK_CHANNEL][256],
+                                   double *rdcost,
+                                   AdpGuidedInfo *adp_guided_info) {
+  const int is_intra_only = frame_is_intra_only(cm);
+  // const int RDMULT = cpi->rd.RDMULT;
+  const int RDMULT =
+      av1_compute_rd_mult_based_on_qindex(cpi, cm->quant_params.base_qindex);
+
+  if (is_intra_only) {
+    my_nn_loopfilter_c(
+        cm, cpi->source, &cpi->nn_post_ccso, &cpi->nn_dblk_input,
+        &cm->cur_frame_residue->buf, &cpi->bs_buffer, &cpi->cnn_out, RDMULT,
+        cnn_guided_mode_costs, norestore_costs, codebook_costs, adp_guided_info,
+        cm->seq_params.bit_depth, cm->quant_params.base_qindex, 1, 1, rdcost);
+  } else {
+    // TODOINTER
+    my_nn_loopfilter_c(
+        cm, cpi->source, &cpi->nn_post_ccso, &cpi->nn_dblk_input,
+        &cm->cur_frame_residue->buf, &cpi->bs_buffer, &cpi->cnn_out, RDMULT,
+        cnn_guided_mode_costs, norestore_costs, codebook_costs, adp_guided_info,
+        cm->seq_params.bit_depth, cm->quant_params.base_qindex, 0, 1, rdcost);
+  }
+  // my_nn_loopfilter_c(
+  //     cm, cpi->source, &cpi->nn_post_ccso, &cpi->nn_dblk_input,
+  //     &cm->cur_frame_residue->buf, &cpi->bs_buffer, &cpi->cnn_out, RDMULT,
+  //     cnn_guided_mode_costs, norestore_costs, codebook_costs,
+  //     adp_guided_info, cm->seq_params.bit_depth,
+  //     cm->quant_params.base_qindex, is_intra_only, 1, rdcost);
+}
+
+// Sum of Squared Errors, SSE
+static void get_sse_planes(const YV12_BUFFER_CONFIG *a,
+                           const YV12_BUFFER_CONFIG *b, int64_t *sse,
+                           int num_planes) {
+  static const int AOM_PLANE[MAX_MB_PLANE] = { AOM_PLANE_Y, AOM_PLANE_U,
+                                               AOM_PLANE_V };
+  for (int plane = 0; plane < num_planes; ++plane) {
+    sse[plane] = aom_get_sse_plane(a, b, AOM_PLANE[plane]);
+  }
+}
+// static void get_sse_planes(const YV12_BUFFER_CONFIG *a,
+//                            const YV12_BUFFER_CONFIG *b,
+//                            int64_t *sse, int num_planes) {
+//   sse[0] = aom_get_sse_plane(a, b, AOM_PLANE_Y);
+//   sse[1] = (num_planes > 1) ? aom_get_sse_plane(a, b, AOM_PLANE_U) :
+//   INT64_MAX; sse[2] = (num_planes > 2) ? aom_get_sse_plane(a, b, AOM_PLANE_V)
+//   : INT64_MAX;
+// }
+#endif
+
+#if CONFIG_MSCNN && 000
 static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
                                 MACROBLOCKD *xd) {
-
   // TODO: Reduce number of buffer copies
   YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
 
@@ -2814,7 +2878,7 @@ static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
   for (int i = 0; i < 2; ++i)
     for (int j = 0; j < 2; ++j)
       av1_cost_tokens_from_cdf(mode_costs->nn_cost[i][j], fc->nn_cdf[i][j], 2,
-                               NULL); // TODOCNN 第三个参数该填什么
+                               NULL);  // TODOCNN 第三个参数该填什么
 
   double best_rdcost_model = DBL_MAX;
   // Create a temporary frame for the loop filter
@@ -2823,7 +2887,8 @@ static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
   memset(&nn_best_output, 0, sizeof(YV12_BUFFER_CONFIG));
   if (aom_alloc_frame_buffer(&nn_best_output, buffer_o->y_crop_width,
                              buffer_o->y_crop_height, buffer_o->subsampling_x,
-                             buffer_o->subsampling_y, buffer_o->border, 0, false)) {
+                             buffer_o->subsampling_y, buffer_o->border, 0,
+                             false)) {
     printf("Error allocating memory for nn best output frame\n");
     exit(0);
   }
@@ -2835,7 +2900,7 @@ static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
   if (aom_alloc_frame_buffer(&nnlf_frame_scaled_residual,
                              buffer_rs->y_crop_width, buffer_rs->y_crop_height,
                              buffer_rs->subsampling_x, buffer_rs->subsampling_y,
-                             buffer_rs->border, 0,false)) {
+                             buffer_rs->border, 0, false)) {
     printf("Error allocating memory for scaled residual frame\n");
     exit(0);
   }
@@ -2871,7 +2936,7 @@ static void nn_loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm,
   }
 
   bool nnlf_frame_modified = false;
-  for (int model_idx = 0; model_idx < MODEL_COUNT; model_idx++) {
+  for (int model_idx = 0; model_idx < CNN_MODEL_COUNT; model_idx++) {
     if (nnlf_frame_modified) {
       aom_yv12_copy_y(&nn_pred_input, &nnlf_frame);
       nnlf_frame_modified = false;
@@ -3259,9 +3324,14 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
       cm->ccso_info.reuse_ccso[plane] = false;
     }
   }
-#if CONFIG_MSCNN
+#if CONFIG_MSCNN && 000
   nn_loopfilter_frame(cpi, cm, xd);
 #endif
+
+#if CONFIG_MSCNN  // NOTECNN 存储CDEF之后的nn_post_cdef
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_post_cdef, 3);
+#endif
+
   if (use_ccso) {
 #if CONFIG_MSCNN
     av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
@@ -3325,12 +3395,65 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
     aom_free(org_uv[pli]);
   }
 
+#if CONFIG_MSCNN  // NOTECNN 存储CCSO之后的nn_post_ccso
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_post_ccso, 3);
+#endif
+
   if (use_gdf) {
     gdf_copy_guided_frame(cm);
   }
 
 #if CONFIG_COLLECT_COMPONENT_TIMING
   start_timing(cpi, loop_restoration_time);
+#endif
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+
+  // Calculate the costs based on the CDF
+  fprintf(stdout, "Calculate the costs based on the CDF\n");
+
+  MACROBLOCK *const x = &cpi->td.mb;
+  av1_fill_cnn_rates(&x->mode_costs, x->e_mbd.tile_ctx,
+                     cm->quant_params.base_qindex, cm->seq_params.bit_depth);
+
+  // The error between the frames processed by CCSO (frames that have not
+  // undergone LR and GDF processing) and the original frames
+  int64_t ccso_errors[MAX_MB_PLANE] = { INT64_MAX, INT64_MAX, INT64_MAX };
+  get_sse_planes(cpi->source, &cm->cur_frame->buf, ccso_errors, num_planes);
+
+  // start
+  fprintf(stdout, "cnn start\n");
+
+  cm->is_use_cnn = false;
+  cm->use_cnn[0] = 0;
+  fprintf(stdout, "[is_use_cnn %d] [is_intra_only %d] [qp%d]\n", cm->is_use_cnn,
+          frame_is_intra_only(cm), cm->quant_params.base_qindex);
+
+  double curr_cnn_rdcosts = DBL_MAX;
+  AdpGuidedInfo adp_guided_info;
+  memset(&adp_guided_info, 0, sizeof(adp_guided_info));
+  int (*codebook_costs)[CODEBOOK_CHANNEL][256] =
+      frame_is_intra_only(cm)
+          ? x->mode_costs.intra_cnn_guided_codebook_index_costs
+          : x->mode_costs.inter_cnn_guided_codebook_index_costs;
+
+  my_nn_loopfilter_frame(cpi, cm, x->mode_costs.cnn_guided_mode_costs,
+                         x->mode_costs.cnn_guided_norestore_cost,
+                         codebook_costs, &curr_cnn_rdcosts, &adp_guided_info);
+  if (cm->is_use_cnn) {
+    quad_copy(&adp_guided_info, &cm->cnn_quad_info, cm);  // TODOINTER
+  }
+  av1_free_quadtree_struct(&adp_guided_info);
+
+  // Calculate the error between the frames processed by CNN-guided filtering
+  // and the original frames
+  int64_t cnn_errors[MAX_MB_PLANE] = { INT64_MAX, INT64_MAX, INT64_MAX };
+  get_sse_planes(cpi->source, &cpi->cnn_out, cnn_errors, num_planes);
+
+  cm->is_use_lr = false;
+  cm->is_use_gdf = false;
+  // cm->lr_y_rdcost = 0.0;
+  // cm->gdf_y_rdcost = 0.0;
 #endif
 
   if (use_restoration)
@@ -3361,10 +3484,92 @@ static void cdef_restoration_frame(AV1_COMP *cpi, AV1_COMMON *cm,
     cm->rst_info[2].frame_restoration_type = RESTORE_NONE;
   }
 
+#if CONFIG_MSCNN  // NOTECNN 存储LR之后的nn_post_lr
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_post_lr, 3);
+#endif
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+  int64_t lr_errors[MAX_MB_PLANE] = { INT64_MAX, INT64_MAX, INT64_MAX };
+  get_sse_planes(cpi->source, &cm->cur_frame->buf, lr_errors, num_planes);
+#endif
+
   if (use_gdf) {
     gdf_optimize_frame(cpi, cm);
     gdf_free_guided_frame(cm);
   }
+
+#if CONFIG_MSCNN  // NOTECNN 存储GDF之后的nn_post_gdf
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_post_gdf, 3);
+#endif
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+  fprintf(stdout, "[is_use_cnn %d] [is_intra_only %d]\n", cm->is_use_cnn,
+          frame_is_intra_only(cm));
+  if (cm->is_use_cnn) {  // TODOINTER
+    // 目前只处理 Y
+    int64_t gdf_errors[MAX_MB_PLANE] = { INT64_MAX, INT64_MAX, INT64_MAX };
+    get_sse_planes(cpi->source, &cm->cur_frame->buf, gdf_errors, num_planes);
+
+    fprintf(stdout, "[is_use_lr %d] [is_use_gdf %d]\n", cm->is_use_lr,
+            cm->is_use_gdf);
+
+    fprintf(stdout, "[lr_y_rdcost %lf] [gdf_y_rdcost %lf]\n", cm->lr_y_rdcost,
+            cm->gdf_y_rdcost);
+
+    fprintf(
+        stdout,
+        "[ccso_errors %ld] [lr_errors %ld] [gdf_errors %ld] [cnn_errors %ld]\n",
+        ccso_errors[0], lr_errors[0], gdf_errors[0], cnn_errors[0]);
+
+    if (cm->is_use_lr && cm->is_use_gdf) {  // 比较lr和gdf
+      if (cnn_errors[0] < lr_errors[0] && cnn_errors[0] < ccso_errors[0] &&
+          cnn_errors[0] < gdf_errors[0] && curr_cnn_rdcosts < cm->lr_y_rdcost &&
+          curr_cnn_rdcosts < cm->gdf_y_rdcost) {  // 需要改成 curr_cnn_rdcosts <
+                                                  // (cm->lr_y_rdcost
+                                                  // + cm->gdf_y_rdcost)
+        assert(cm->cnn_quad_info.signaled == 0);
+        cm->use_cnn[0] = 1;
+        cm->rst_info[0].frame_restoration_type = RESTORE_NONE;
+        aom_yv12_copy_y(&cpi->cnn_out, &cm->cur_frame->buf);
+      } else {
+        cm->use_cnn[0] = 0;
+      }
+    } else if (cm->is_use_lr) {  // 比较lr
+      if (cnn_errors[0] < lr_errors[0] && cnn_errors[0] < ccso_errors[0] &&
+          curr_cnn_rdcosts < cm->lr_y_rdcost) {
+        assert(cm->cnn_quad_info.signaled == 0);
+        cm->use_cnn[0] = 1;
+        cm->rst_info[0].frame_restoration_type = RESTORE_NONE;
+        aom_yv12_copy_y(&cpi->cnn_out, &cm->cur_frame->buf);
+      } else {
+        cm->use_cnn[0] = 0;
+      }
+    } else if (cm->is_use_gdf) {  // 比较gdf
+      if (cnn_errors[0] < ccso_errors[0] && cnn_errors[0] < gdf_errors[0] &&
+          curr_cnn_rdcosts < cm->gdf_y_rdcost) {
+        assert(cm->cnn_quad_info.signaled == 0);
+        cm->use_cnn[0] = 1;
+        aom_yv12_copy_y(&cpi->cnn_out, &cm->cur_frame->buf);
+      } else {
+        cm->use_cnn[0] = 0;
+      }
+    } else {
+      if (cnn_errors[0] < ccso_errors[0]) {
+        assert(cm->cnn_quad_info.signaled == 0);
+        cm->use_cnn[0] = 1;
+        aom_yv12_copy_y(&cpi->cnn_out, &cm->cur_frame->buf);
+      } else {
+        cm->use_cnn[0] = 0;
+      }
+    }
+    // fprintf(stdout,"use_cnn[0] = %d, use_cnn[1] = %d, use_cnn[2] =
+    // %d\n",cm->use_cnn[0],cm->use_cnn[1],cm->use_cnn[2]);
+  } else {
+    cm->use_cnn[0] = 0;
+  }
+  fprintf(stdout, "use_cnn[0] = %d, use_cnn[1] = %d, use_cnn[2] = %d\n",
+          cm->use_cnn[0], cm->use_cnn[1], cm->use_cnn[2]);
+#endif
 
 #if CONFIG_COLLECT_COMPONENT_TIMING
   end_timing(cpi, loop_restoration_time);
@@ -3428,11 +3633,12 @@ static void loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
   if (lf->filter_level[0] || lf->filter_level[1]) {
 #if CONFIG_MSCNN
     if (num_workers > 1)
-      av1_loop_filter_frame_mt(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd, 0, num_planes, 0,
-                               mt_info->workers, num_workers,
-                               &mt_info->lf_row_sync);
+      av1_loop_filter_frame_mt(&cm->cur_frame->buf, &cm->cur_frame_residue->buf,
+                               cm, xd, 0, num_planes, 0, mt_info->workers,
+                               num_workers, &mt_info->lf_row_sync);
     else
-      av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf, cm, xd, 0, num_planes, 0);
+      av1_loop_filter_frame(&cm->cur_frame->buf, &cm->cur_frame_residue->buf,
+                            &cpi->bs_buffer, cm, xd, 0, num_planes, 0);
 #else
     if (num_workers > 1)
       av1_loop_filter_frame_mt(&cm->cur_frame->buf, cm, xd, 0, num_planes, 0,
@@ -3446,7 +3652,15 @@ static void loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
   end_timing(cpi, loop_filter_time);
 #endif
 
+#if CONFIG_MSCNN  // NOTECNN 保存去块滤波之后的nn_post_dblk
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_post_dblk, 3);
+#endif
+
   cdef_restoration_frame(cpi, cm, xd, use_restoration, use_cdef, use_gdf);
+
+#if CONFIG_MAKE_DATASETS  // NOTECNN 输出数据
+  nn_lf_make_datasets(cpi, cm);
+#endif
 }
 
 /*!\brief If the error resilience mode is turned on in the encoding, for frames
@@ -4398,28 +4612,87 @@ static int encode_with_recode_loop_and_filter(AV1_COMP *cpi, size_t *size,
   av1_set_lr_tools(master_lr_tools_disable_mask[1], 2, &cm->features);
 
   // Pick the loop filter level for the frame.
-#if CONFIG_MSCNN
-    YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
-    memset(&nn_dblk_input, 0, sizeof(YV12_BUFFER_CONFIG));
-    aom_alloc_frame_buffer(&nn_dblk_input, buffer->y_crop_width,
-                           buffer->y_crop_height, buffer->subsampling_x,
-                           buffer->subsampling_y, buffer->border, 0, false);
-    buffer = NULL;
-    aom_yv12_copy_frame(&cm->cur_frame->buf, &nn_dblk_input, 3);
+#if CONFIG_MSCNN && 000
+  YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
+  memset(&nn_dblk_input, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&nn_dblk_input, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+  buffer = NULL;
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &nn_dblk_input, 3);
 #endif
+
+  YV12_BUFFER_CONFIG *buffer = &cm->cur_frame->buf;
+#if CONFIG_MSCNN  // NOTECNN YV12_BUFFER_CONFIG 初始化 +
+                  // 保存去块滤波之前的nn_dblk_input
+  memset(&cpi->bs_buffer, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->bs_buffer, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_dblk_input, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_dblk_input, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_post_dblk, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_post_dblk, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_post_cdef, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_post_cdef, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_post_ccso, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_post_ccso, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_post_lr, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_post_lr, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->nn_post_gdf, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->nn_post_gdf, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+
+  memset(&cpi->cnn_out, 0, sizeof(YV12_BUFFER_CONFIG));
+  aom_alloc_frame_buffer(&cpi->cnn_out, buffer->y_crop_width,
+                         buffer->y_crop_height, buffer->subsampling_x,
+                         buffer->subsampling_y, buffer->border, 0, false);
+  aom_yv12_copy_frame(&cm->cur_frame->buf, &cpi->nn_dblk_input, 3);
+#endif
+  buffer = NULL;
+
 #if CONFIG_CWG_F317
   if (!cm->bru.frame_inactive_flag && !cm->bridge_frame_info.is_bridge_frame)
     loopfilter_frame(cpi, cm);
 #else
   if (!cm->bru.frame_inactive_flag) loopfilter_frame(cpi, cm);
 #endif  // CONFIG_CWG_F317
-#if CONFIG_MSCNN
-    aom_free_frame_buffer(&nn_dblk_input);
-#endif  
 
-// #if CONFIG_MSCNN // TODOCNN 这段代码还需要吗 放在什么地方
-//     cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
-// #endif
+#if CONFIG_MSCNN && 000
+  aom_free_frame_buffer(&nn_dblk_input);
+#endif
+
+#if CONFIG_MSCNN  // NOTECNN 释放内存
+  aom_free_frame_buffer(&cpi->bs_buffer);
+  aom_free_frame_buffer(&cpi->nn_dblk_input);
+  aom_free_frame_buffer(&cpi->nn_post_dblk);
+  aom_free_frame_buffer(&cpi->nn_post_cdef);
+  aom_free_frame_buffer(&cpi->nn_post_ccso);
+  aom_free_frame_buffer(&cpi->nn_post_lr);
+  aom_free_frame_buffer(&cpi->nn_post_gdf);
+  aom_free_frame_buffer(&cpi->cnn_out);
+#endif
+
+  // #if CONFIG_MSCNN // TODOCNN 这段代码还需要吗 放在什么地方
+  //     cm->nn_loopfilter_info.nn_loopfilter_enable = 0;
+  // #endif
   int64_t tip_as_output_sse = INT64_MAX;
   int64_t tip_as_output_rate = INT64_MAX;
 

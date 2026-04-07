@@ -70,10 +70,11 @@ static std::unique_ptr<tflite::Interpreter> create_interpreter(
   builder(&interpreter);
   if (interpreter->ModifyGraphWithDelegate(xnnpack_delegate.get()) !=
       kTfLiteOk) {
+    std::cout << "1" << std::endl; // PCNN
     reporter->Report("Failed at modifying graph with XNNPack delegate");
     exit(1);
   }
-
+  std::cout << "pass" << std::endl; // PCNN
   if (interpreter->AllocateTensors() != kTfLiteOk) {
     reporter->Report("Failed at allocating tensors");
     exit(1);
@@ -192,6 +193,8 @@ static void ensure_tflite_init(void **context, MODEL_TYPE model_type) {
   ModelDef def = models[model_type];
   if (!ctx->models[model_type]) {
     if (def.model_def != NULL) {
+      // PCNN
+      std::cout << "create_interpreter(def.model_def, ctx->to_delete);" << std::endl;
       ctx->models[model_type] =
           create_interpreter(def.model_def, ctx->to_delete);
       get_input_order(ctx->models[model_type].get(),

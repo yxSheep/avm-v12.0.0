@@ -66,6 +66,13 @@
 
 #include "av1/common/gdf.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/guided_adaptive_channel.h"
+#include "av1/common/guided_codebook.h"
+#include "av1/common/nn_loopfilter.h"
+#include "aom_dsp/bitwriter.h"
+#endif
+
 // Silence compiler warning for unused static functions
 static void image2yuvconfig_upshift(aom_image_t *hbd_img,
                                     const aom_image_t *img,
@@ -98,6 +105,13 @@ static AOM_INLINE void write_wienerns_framefilters(AV1_COMMON *cm,
                                                    MACROBLOCKD *xd, int plane,
                                                    aom_writer *wb);
 #endif  // CONFIG_LR_FRAMEFILTERS_IN_HEADER
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+static void write_filter_quadtree(FRAME_CONTEXT *ctx, int qp, int bit_depth,
+                                  int width, int height, int superres_denom,
+                                  int is_intra_only, const AdpGuidedInfo *qi,
+                                  aom_writer *wb);
+#endif
 
 static AOM_INLINE void write_intrabc_info(
     int max_bvp_drl_bits, const AV1_COMMON *const cm, MACROBLOCKD *xd,
@@ -1391,6 +1405,12 @@ static AOM_INLINE void write_cfl_alphas(FRAME_CONTEXT *const ec_ctx,
 static AOM_INLINE void write_gdf(const AV1_COMMON *cm, MACROBLOCKD *const xd,
                                  aom_writer *w) {
   if (!is_allow_gdf(cm)) return;
+#if CONFIG_MY_GUIDED_CNN  // TODOCNNGDF
+  if (cm->use_cnn[0]) {
+    // printf("CNN GDF return\n");
+    return;
+  }
+#endif
   if ((cm->gdf_info.gdf_mode < 2) || (cm->gdf_info.gdf_block_num <= 1)) return;
   if ((xd->mi_row % cm->mib_size != 0) || (xd->mi_col % cm->mib_size != 0))
     return;
@@ -3006,6 +3026,9 @@ static AOM_INLINE void write_modes_sb(
   const int plane_end =
       get_partition_plane_end(xd->tree_type, av1_num_planes(cm));
   for (int plane = plane_start; plane < plane_end; ++plane) {
+#if CONFIG_MY_GUIDED_CNN
+    if (cm->use_cnn[plane]) continue;
+#endif
     int rcol0, rcol1, rrow0, rrow1;
     if (cm->rst_info[plane].frame_restoration_type != RESTORE_NONE &&
         !cm->bru.frame_inactive_flag &&
@@ -3032,6 +3055,17 @@ static AOM_INLINE void write_modes_sb(
       }
     }
   }
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+  if (cm->use_cnn[0] && !cm->cnn_quad_info.signaled) {
+    AdpGuidedInfo *qi = (AdpGuidedInfo *)&cm->cnn_quad_info;
+    write_filter_quadtree(xd->tile_ctx, cm->quant_params.base_qindex,
+                          cm->seq_params.bit_depth, cm->width, cm->height, 1,
+                          frame_is_intra_only(cm), qi,
+                          w);  // TODOCNN write_filter_quadtree 1,
+    qi->signaled = 1;
+  }
+#endif
 
   const PARTITION_TYPE p = write_partition(cm, xd, mi_row, mi_col, partition,
                                            bsize, ptree, ptree_luma, w);
@@ -3303,13 +3337,23 @@ static AOM_INLINE void write_modes(AV1_COMP *const cpi,
     }
   }
 
-#if CONFIG_MSCNN
-  if(cm->nn_loopfilter_info.nn_loopfilter_enable && cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable && tile_row==0 && tile_col==0) {
+#if CONFIG_MSCNN && 000
+  if (cm->nn_loopfilter_info.nn_loopfilter_enable &&
+      cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable &&
+      tile_row == 0 && tile_col == 0) {
     // TODO: Disable access across tile boundary
     for (int i = 0; i < cm->nn_loopfilter_info.flag_count; i++) {
-      uint8_t top_ctx  = ( (i - cm->nn_loopfilter_info.stride) < 0 )  ? 0 : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - cm->nn_loopfilter_info.stride)];
-      uint8_t left_ctx = ( (i % cm->nn_loopfilter_info.stride) == 0 ) ? 0 : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - 1)];
-      aom_write_symbol(w, cm->nn_loopfilter_info.nn_loopfilter_flags[i], xd->tile_ctx->nn_cdf[left_ctx][top_ctx], 2);
+      uint8_t top_ctx =
+          ((i - cm->nn_loopfilter_info.stride) < 0)
+              ? 0
+              : cm->nn_loopfilter_info
+                    .nn_loopfilter_flags[(i - cm->nn_loopfilter_info.stride)];
+      uint8_t left_ctx =
+          ((i % cm->nn_loopfilter_info.stride) == 0)
+              ? 0
+              : cm->nn_loopfilter_info.nn_loopfilter_flags[(i - 1)];
+      aom_write_symbol(w, cm->nn_loopfilter_info.nn_loopfilter_flags[i],
+                       xd->tile_ctx->nn_cdf[left_ctx][top_ctx], 2);
     }
   }
 #endif
@@ -3724,7 +3768,7 @@ static AOM_INLINE void write_wienerns_framefilters_hdr(
         nsfilter_params, c_id, wb);
   }
   assert(num_classes <= WIENERNS_MAX_CLASSES);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
 
   for (int c_id = 0; c_id < num_classes; ++c_id) {
     if (skip_filter_write_for_class[c_id]) continue;
@@ -3850,7 +3894,7 @@ static AOM_INLINE void write_wienerns_framefilters(AV1_COMMON *cm,
         nsfilter_params, c_id, xd, wb);
   }
   assert(num_classes <= WIENERNS_MAX_CLASSES);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
 
   for (int c_id = 0; c_id < num_classes; ++c_id) {
     if (skip_filter_write_for_class[c_id]) continue;
@@ -3953,7 +3997,7 @@ static AOM_INLINE void write_wienerns_filter(
   }
   const int num_classes = wienerns_info->num_classes;
   assert(num_classes <= WIENERNS_MAX_CLASSES);
-  const int(*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
+  const int (*wienerns_coeffs)[WIENERNS_COEFCFG_LEN] = nsfilter_params->coeffs;
 
   for (int c_id = 0; c_id < num_classes; ++c_id) {
     if (skip_filter_write_for_class[c_id]) {
@@ -4097,6 +4141,121 @@ static AOM_INLINE void loop_restoration_write_sb_coeffs(
     }
   }
 }
+
+#if CONFIG_MY_CNN && CONFIG_MY_GUIDED_CNN
+static void write_quadtree_split_info(FRAME_CONTEXT *ctx, int width, int height,
+                                      int QP, int is_intra_only,
+                                      const AdpGuidedInfo *qi, aom_writer *wb) {
+#ifndef NDEBUG
+  int unit_info_length = 0;
+#endif  // NDEBUG
+  int split_info_index = 0;
+  const int ext_size = qi->unit_size * 3 / 2;
+
+  const int norestore_ctx = get_guided_norestore_ctx(QP, is_intra_only);
+
+  for (int row = 0; row < height;) {
+    const int remaining_height = height - row;
+    const int this_unit_height =
+        (remaining_height < ext_size) ? remaining_height : qi->unit_size;
+    for (int col = 0; col < width;) {
+      const int remaining_width = width - col;
+      const int this_unit_width =
+          (remaining_width < ext_size) ? remaining_width : qi->unit_size;
+      assert(split_info_index < qi->mode_info_length);
+
+      const GuidedAdaptiveChannelType partition_type =
+          qi->mode_info[split_info_index].mode;
+
+      aom_write_symbol(wb, partition_type != GUIDED_C_INVALID,
+                       ctx->cnn_guided_norestore_cdf[norestore_ctx], 2);
+      if (partition_type != GUIDED_C_INVALID) {
+        aom_write_symbol(wb, partition_type, ctx->cnn_guided_mode_cdf,
+                         GUIDED_C_TYPES);
+      }
+
+#ifndef NDEBUG
+      if (partition_type != GUIDED_NONE) {
+        ++unit_info_length;
+      }
+#endif  // NDEBUG
+      ++split_info_index;
+      col += this_unit_width;
+    }
+    row += this_unit_height;
+  }
+#ifndef NDEBUG
+  assert(qi->unit_info_length == unit_info_length);
+#endif  // NDEBUG
+}
+
+static void write_filter_quadtree(FRAME_CONTEXT *ctx, int QP, int bit_depth,
+                                  int width, int height, int superres_denom,
+                                  int is_intra_only, const AdpGuidedInfo *qi,
+                                  aom_writer *wb) {
+  write_quadtree_split_info(ctx, width, height, QP, is_intra_only, qi, wb);
+
+  int symb_idx = 0;
+  for (int i = 0; i < qi->mode_info_length; i++) {
+    int mode = qi->mode_info[i].mode;
+
+    if (mode == GUIDED_NONE || mode == GUIDED_C_INVALID) {
+      continue;
+    } else {
+      int codebook_idx = qi->unit_info[symb_idx].xqd[0];
+
+      int qp_idx = get_qp_idx(QP, is_intra_only, bit_depth);
+
+      aom_cdf_prob *mode_cdf =
+          is_intra_only ? ctx->intra_cnn_guided_codebook_cdf[qp_idx][mode - 1]
+                        : ctx->inter_cnn_guided_codebook_cdf[qp_idx][mode - 1];
+      int nsymbs = get_codebook_nsymbs(qp_idx, mode - 1, is_intra_only, 0);
+
+      fprintf(stdout, "mode: %d, codebook_idx: %d nsymbs: %d\n", mode,
+              codebook_idx, nsymbs);
+      // if (codebook_idx < nsymbs - 1) {
+      aom_write_cdf(wb, codebook_idx, mode_cdf, nsymbs);
+      // }
+
+      if (qi->use_res_cb[symb_idx]) {
+        int res_codebook_idx = qi->unit_info[symb_idx].xqd[1];
+
+        aom_cdf_prob *res_mode_cdf =
+            is_intra_only
+                ? ctx->intra_res_cnn_guided_codebook_cdf[qp_idx][mode - 1]
+                : ctx->inter_res_cnn_guided_codebook_cdf[qp_idx][mode - 1];
+        int res_nsymbs =
+            get_codebook_nsymbs(qp_idx, mode - 1, is_intra_only, 1);
+        (void)res_nsymbs;
+        (void)res_mode_cdf;
+        fprintf(stdout, "res mode: %d, res codebook_idx: %d res nsymbs: %d\n",
+                mode, res_codebook_idx, res_nsymbs);
+        aom_write_cdf(wb, res_codebook_idx, res_mode_cdf, res_nsymbs);
+      }
+      symb_idx++;
+    }
+  }
+}
+
+static INLINE void quad_tree_write_unit_index(struct aom_write_bit_buffer *wb,
+                                              const AdpGuidedInfo *const qi) {
+  assert(qi->unit_index >= 0 && qi->unit_index < GUIDED_QT_UNIT_SIZES);
+  aom_wb_write_literal(wb, qi->unit_index, GUIDED_QT_UNIT_SIZES_LOG2);
+}
+
+static void encode_cnn(AV1_COMMON *cm, struct aom_write_bit_buffer *wb) {
+  // NOTECNN 这里标记了当前帧 Y U V 是否使用了CNN滤波
+  for (int plane = 0; plane < av1_num_planes(cm); ++plane) {
+    aom_wb_write_bit(wb, cm->use_cnn[plane]);
+  }
+
+  // NOTECNN 帧级码流 目前只标记 Y 用哪一种分割
+  if (cm->use_cnn[0]) {
+    quad_tree_write_unit_index(wb, &cm->cnn_quad_info);
+  }
+}
+
+#endif
 
 static AOM_INLINE void encode_loopfilter(AV1_COMMON *cm,
                                          struct aom_write_bit_buffer *wb) {
@@ -4248,8 +4407,9 @@ static AOM_INLINE void encode_cdef(const AV1_COMMON *cm,
   }
 }
 
-#if CONFIG_MSCNN
-static AOM_INLINE void encode_nn_loopfilter( const AV1_COMMON *cm, struct aom_write_bit_buffer *wb ){
+#if CONFIG_MSCNN && 000
+static AOM_INLINE void encode_nn_loopfilter(const AV1_COMMON *cm,
+                                            struct aom_write_bit_buffer *wb) {
   aom_wb_write_literal(wb, cm->nn_loopfilter_info.nn_loopfilter_enable, 1);
   if (cm->nn_loopfilter_info.nn_loopfilter_enable) {
     aom_wb_write_literal(wb, cm->nn_loopfilter_info.model_idx, MODEL_BITS);
@@ -4258,14 +4418,20 @@ static AOM_INLINE void encode_nn_loopfilter( const AV1_COMMON *cm, struct aom_wr
     } else if (cm->nn_loopfilter_info.rs_idx == 1) {
       aom_wb_write_literal(wb, 0, 1);
       aom_wb_write_literal(wb, 1, 1);
-    } else { // 2
+    } else {  // 2
       assert(cm->nn_loopfilter_info.rs_idx == 2);
       aom_wb_write_literal(wb, 0, 1);
       aom_wb_write_literal(wb, 0, 1);
     }
-    aom_wb_write_literal(wb, cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable, 1);
+    aom_wb_write_literal(
+        wb, cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable, 1);
     if (cm->nn_loopfilter_info.nn_loopfilter_blk_control_enable) {
-      assert((int) (ceil(cm->cur_frame->buf.y_height / (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx]) * ceil(cm->cur_frame->buf.y_width / (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx])) == cm->nn_loopfilter_info.flag_count);
+      assert(
+          (int)(ceil(cm->cur_frame->buf.y_height /
+                     (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx]) *
+                ceil(cm->cur_frame->buf.y_width /
+                     (double)blk_sizes[cm->nn_loopfilter_info.blk_size_idx])) ==
+          cm->nn_loopfilter_info.flag_count);
       aom_wb_write_literal(wb, cm->nn_loopfilter_info.blk_size_idx, 2);
     }
   }
@@ -5102,9 +5268,9 @@ static AOM_INLINE void write_film_grain_params(
   ((j) > 0 ? (fgm_scaling_points[i][j][0] - fgm_scaling_points[i][(j) - 1][0]) \
            : (fgm_scaling_points[i][j][0]))
 #define fgm_value_scale(i, j) (fgm_scaling_points[i][j][1])
-  const int(*fgm_scaling_points[])[2] = { pars->fgm_scaling_points_0,
-                                          pars->fgm_scaling_points_1,
-                                          pars->fgm_scaling_points_2 };
+  const int (*fgm_scaling_points[])[2] = { pars->fgm_scaling_points_0,
+                                           pars->fgm_scaling_points_1,
+                                           pars->fgm_scaling_points_2 };
 
   int fgmNumChannels = cm->seq_params.monochrome ? 1 : 3;
 
@@ -7115,12 +7281,16 @@ static AOM_INLINE void write_uncompressed_header_obu
     if (!features->coded_lossless) {
       encode_loopfilter(cm, wb);
 
+#if CONFIG_MY_CNN
+      encode_cnn(cm, wb);
+#endif
+
       encode_gdf(cm, wb);
 
       encode_cdef(cm, wb);
     }
 #if CONFIG_MSCNN
-    encode_nn_loopfilter(cm, wb);
+    // encode_nn_loopfilter(cm, wb);
 #endif
     encode_restoration_mode(cm, wb);
     if (!features->coded_lossless && cm->seq_params.enable_ccso) {

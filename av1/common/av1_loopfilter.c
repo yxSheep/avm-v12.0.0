@@ -1074,10 +1074,17 @@ static uint8_t get_lossless_flag(
 }
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
 
+#if CONFIG_MSCNN
+void av1_filter_block_plane_vert(AV1_COMMON *const cm,
+                                 const MACROBLOCKD *const xd, struct buf_2d *bs_dst, const int plane,
+                                 const MACROBLOCKD_PLANE *const plane_ptr,
+                                 const uint32_t mi_row, const uint32_t mi_col) {
+#else
 void av1_filter_block_plane_vert(AV1_COMMON *const cm,
                                  const MACROBLOCKD *const xd, const int plane,
                                  const MACROBLOCKD_PLANE *const plane_ptr,
                                  const uint32_t mi_row, const uint32_t mi_col) {
+#endif
   if (!plane && !cm->lf.filter_level[0]) return;
   const int mib_size = cm->mib_size;
   const uint32_t scale_horz = plane_ptr->subsampling_x;
@@ -1091,6 +1098,12 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
   }
   uint16_t *const dst_ptr = plane_ptr->dst.buf;
   const int dst_stride = plane_ptr->dst.stride;
+
+#if CONFIG_MSCNN
+uint16_t *const bs_ptr = bs_dst->buf;
+const int bs_stride = bs_dst->stride;
+#endif
+
   const int y_range = (mib_size >> scale_vert);
   const int x_range = (mib_size >> scale_horz);
 
@@ -1102,7 +1115,9 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
     uint16_t *p = dst_ptr + y * MI_SIZE * dst_stride;
     uint32_t prev_x =
         (mi_col == 0) ? 0 : ((mi_col - 1) * MI_SIZE) >> scale_horz;
-
+#if CONFIG_MSCNN
+    uint16_t *bs_p = bs_ptr + y * MI_SIZE * bs_stride;
+#endif
     AV1_DEBLOCKING_PARAMETERS *params = params_buf;
     TX_SIZE *tx_size = tx_size_buf;
     int *mi_size_min_height = mi_size_min_height_buf;
@@ -1155,7 +1170,17 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
 #if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
           if (!(is_lossless_prev_block || is_lossless_current_block)) {
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
-
+#if CONFIG_MSCNN
+            nn_aom_highbd_lpf_vertical_generic(
+                p, bs_p, dst_stride, bs_stride, params->filter_length_neg,
+                params->filter_length_pos, &params->q_threshold,
+                &params->side_threshold, bit_depth
+#if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+                ,
+                is_lossless_prev_block, is_lossless_current_block
+#endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+            );
+#else
             aom_highbd_lpf_vertical_generic(
                 p, dst_stride, params->filter_length_neg,
                 params->filter_length_pos, &params->q_threshold,
@@ -1165,9 +1190,20 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
                 is_lossless_prev_block, is_lossless_current_block
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
             );
-
+#endif
 #if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
           } else {
+#if CONFIG_MSCNN
+            nn_aom_highbd_lpf_vertical_generic_c(
+                p, bs_p, dst_stride, bs_stride, params->filter_length_neg,
+                params->filter_length_pos, &params->q_threshold,
+                &params->side_threshold, bit_depth
+#if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+                ,
+                is_lossless_prev_block, is_lossless_current_block
+#endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+            );
+#else     
             aom_highbd_lpf_vertical_generic_c(
                 p, dst_stride, params->filter_length_neg,
                 params->filter_length_pos, &params->q_threshold,
@@ -1176,7 +1212,8 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
                 ,
                 is_lossless_prev_block, is_lossless_current_block
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
-            );
+            ); 
+#endif            
           }
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
         }
@@ -1188,16 +1225,28 @@ void av1_filter_block_plane_vert(AV1_COMMON *const cm,
       advance_units = tx_size_wide_unit[cur_tx_size];
       x += advance_units;
       p += advance_units * MI_SIZE;
+#if CONFIG_MSCNN
+      bs_p += advance_units * MI_SIZE;
+#endif
       params += advance_units;
       tx_size += advance_units;
       mi_size_min_height += advance_units;
     }
   }
 }
+
+#if CONFIG_MSCNN
+void av1_filter_block_plane_horz(AV1_COMMON *const cm,
+                                 const MACROBLOCKD *const xd, 
+                                 struct buf_2d *bs_dst, const int plane,
+                                 const MACROBLOCKD_PLANE *const plane_ptr,
+                                 const uint32_t mi_row, const uint32_t mi_col) {
+#else
 void av1_filter_block_plane_horz(AV1_COMMON *const cm,
                                  const MACROBLOCKD *const xd, const int plane,
                                  const MACROBLOCKD_PLANE *const plane_ptr,
                                  const uint32_t mi_row, const uint32_t mi_col) {
+#endif
   if (!plane && !cm->lf.filter_level[1]) return;
   const int mib_size = cm->mib_size;
   const uint32_t scale_horz = plane_ptr->subsampling_x;
@@ -1211,6 +1260,10 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
   }
   uint16_t *const dst_ptr = plane_ptr->dst.buf;
   const int dst_stride = plane_ptr->dst.stride;
+#if CONFIG_MSCNN
+  uint16_t *const bs_ptr = bs_dst->buf;
+  const int bs_stride = bs_dst->stride;
+#endif
   const int y_range = (mib_size >> scale_vert);
   const int x_range = (mib_size >> scale_horz);
 
@@ -1222,7 +1275,9 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
     uint16_t *p = dst_ptr + x * MI_SIZE;
     uint32_t prev_y =
         (mi_row == 0) ? 0 : ((mi_row - 1) * MI_SIZE) >> scale_vert;
-
+#if CONFIG_MSCNN
+    uint16_t *bs_p = bs_ptr + x * MI_SIZE;
+#endif
     AV1_DEBLOCKING_PARAMETERS *params = params_buf;
     TX_SIZE *tx_size = tx_size_buf;
     int *mi_size_min_width = mi_size_min_width_buf;
@@ -1273,6 +1328,17 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
 #if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
           if (!(is_lossless_current_block || is_lossless_prev_block)) {
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+#if CONFIG_MSCNN
+            nn_aom_highbd_lpf_horizontal_generic(
+                p, bs_p, dst_stride, bs_stride, params->filter_length_neg,
+                params->filter_length_pos, &params->q_threshold,
+                &params->side_threshold, bit_depth
+#if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+                ,
+                is_lossless_prev_block, is_lossless_current_block
+#endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+            );
+#else
             aom_highbd_lpf_horizontal_generic(
                 p, dst_stride, params->filter_length_neg,
                 params->filter_length_pos, &params->q_threshold,
@@ -1282,8 +1348,20 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
                 is_lossless_prev_block, is_lossless_current_block
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
             );
+#endif
 #if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
           } else {
+#if CONFIG_MSCNN
+            nn_aom_highbd_lpf_horizontal_generic_c(
+                p, bs_p, dst_stride, bs_stride, params->filter_length_neg,
+                params->filter_length_pos, &params->q_threshold,
+                &params->side_threshold, bit_depth
+#if CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+                ,
+                is_lossless_prev_block, is_lossless_current_block
+#endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
+            );
+#else
             aom_highbd_lpf_horizontal_generic_c(
                 p, dst_stride, params->filter_length_neg,
                 params->filter_length_pos, &params->q_threshold,
@@ -1293,6 +1371,7 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
                 is_lossless_prev_block, is_lossless_current_block
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
             );
+#endif
           }
 #endif  // CONFIG_DISABLE_LOOP_FILTERS_LOSSLESS
         }
@@ -1304,6 +1383,9 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
       advance_units = tx_size_high_unit[cur_tx_size];
       y += advance_units;
       p += advance_units * dst_stride * MI_SIZE;
+#if CONFIG_MSCNN
+      bs_p += advance_units  * bs_stride * MI_SIZE;
+#endif
       params += advance_units;
       tx_size += advance_units;
       mi_size_min_width += advance_units;
@@ -1313,7 +1395,8 @@ void av1_filter_block_plane_horz(AV1_COMMON *const cm,
 
 #if CONFIG_MSCNN
 static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer,
-                             YV12_BUFFER_CONFIG *residue_buffer, AV1_COMMON *cm,
+                             YV12_BUFFER_CONFIG *residue_buffer, 
+                             YV12_BUFFER_CONFIG *bs_buffer, AV1_COMMON *cm,
                              MACROBLOCKD *xd, int start, int stop,
                              int plane_start, int plane_end) {
 #else
@@ -1322,6 +1405,9 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
                              int plane_start, int plane_end) {
 #endif
   struct macroblockd_plane *pd = xd->plane;
+#if CONFIG_MSCNN
+  struct buf_2d bs_block_dst[MAX_MB_PLANE];
+#endif
   const int col_start = 0;
   const int col_end = cm->mi_params.mi_cols;
   int mi_row, mi_col;
@@ -1344,35 +1430,53 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
 #if CONFIG_MSCNN
           av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
                                plane, plane + 1, NULL);
+
+          av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col, plane, plane+1, NULL);
+
+          av1_filter_block_plane_vert(cm, xd, &bs_block_dst[plane], plane, &pd[plane], mi_row,
+                                      mi_col);                               
 #else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-#endif
+
           av1_filter_block_plane_vert(cm, xd, plane, &pd[plane], mi_row,
-                                      mi_col);
+                                      mi_col);                               
+#endif
           // filter horizontal edges
           if (mi_col - mib_size >= 0) {
 #if CONFIG_MSCNN
             av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row,
                                  mi_col - mib_size, plane, plane + 1, NULL);
+            
+            av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col - mib_size, plane, plane + 1, NULL);                     
+
+            av1_filter_block_plane_horz(cm, xd, &bs_block_dst[plane], plane, &pd[plane], mi_row,
+                                        mi_col - mib_size);                                 
 #else
             av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col - mib_size,
                                  plane, plane + 1, NULL);
-#endif
+
             av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
-                                        mi_col - mib_size);
+                                        mi_col - mib_size);                                 
+#endif
           }
         }
         // filter horizontal edges
 #if CONFIG_MSCNN
         av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row,
                              mi_col - mib_size, plane, plane + 1, NULL);
+
+        av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col - mib_size, plane, plane + 1, NULL);                             
+
+        av1_filter_block_plane_horz(cm, xd, &bs_block_dst[plane], plane, &pd[plane], mi_row,
+                                    mi_col - mib_size);                             
 #else
         av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col - mib_size, plane,
                              plane + 1, NULL);
-#endif
+
         av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
                                     mi_col - mib_size);
+#endif
       }
     } else {
       // filter all vertical edges in every 128x128 super block
@@ -1381,12 +1485,18 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
 #if CONFIG_MSCNN
           av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
                                plane, plane + 1, NULL);
+
+          av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col, plane, plane + 1, NULL);                               
+
+          av1_filter_block_plane_vert(cm, xd, &bs_block_dst[plane], plane, &pd[plane], mi_row,
+                                      mi_col);                               
 #else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-#endif
+
           av1_filter_block_plane_vert(cm, xd, plane, &pd[plane], mi_row,
-                                      mi_col);
+                                      mi_col);                               
+#endif
         }
       }
 
@@ -1396,12 +1506,18 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
 #if CONFIG_MSCNN
           av1_setup_dst_planes(pd, frame_buffer, residue_buffer, mi_row, mi_col,
                                plane, plane + 1, NULL);
+
+          av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col, plane, plane + 1, NULL);                              
+
+          av1_filter_block_plane_horz(cm, xd, &bs_block_dst[plane], plane, &pd[plane], mi_row,
+                                      mi_col);                               
 #else
           av1_setup_dst_planes(pd, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-#endif
+
           av1_filter_block_plane_horz(cm, xd, plane, &pd[plane], mi_row,
-                                      mi_col);
+                                      mi_col);                               
+#endif
         }
       }
     }
@@ -1410,7 +1526,8 @@ static void loop_filter_rows(YV12_BUFFER_CONFIG *frame_buffer, AV1_COMMON *cm,
 
 #if CONFIG_MSCNN
 void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, 
-                           YV12_BUFFER_CONFIG *residue, AV1_COMMON *cm,
+                           YV12_BUFFER_CONFIG *residue,                            
+                           YV12_BUFFER_CONFIG *bs, AV1_COMMON *cm,
                            MACROBLOCKD *xd, int plane_start, int plane_end,
                            int partial_frame) {
 #else
@@ -1434,7 +1551,7 @@ void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, AV1_COMMON *cm,
   end_mi_row = start_mi_row + mi_rows_to_filter;
   av1_loop_filter_frame_init(cm, plane_start, plane_end);
 #if CONFIG_MSCNN
-  loop_filter_rows(frame, residue, cm, xd, start_mi_row, end_mi_row, plane_start,
+  loop_filter_rows(frame, residue, bs, cm, xd, start_mi_row, end_mi_row, plane_start,
                    plane_end);
 #else
   loop_filter_rows(frame, cm, xd, start_mi_row, end_mi_row, plane_start,

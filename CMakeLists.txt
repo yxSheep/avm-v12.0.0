@@ -301,9 +301,9 @@ endif()
 
 if(NOT WIN32 AND NOT APPLE)
   target_link_libraries(aom ${AOM_LIB_LINK_TYPE} m)
-  if(CONFIG_MSCNN)  
-    target_link_libraries(aom ${AOM_LIB_LINK_TYPE} torch)
-  endif()  
+  # if(CONFIG_MSCNN)  
+  #   target_link_libraries(aom ${AOM_LIB_LINK_TYPE} torch)
+  # endif()  
   if(BUILD_SHARED_LIBS)
     target_link_libraries(aom_static ${AOM_LIB_LINK_TYPE} m)
   endif()
@@ -595,6 +595,33 @@ if(CONFIG_AV1_ENCODER)
   # Add encoder examples and tools to the targets list.
   list(APPEND AOM_APP_TARGETS ${AOM_ENCODER_EXAMPLE_TARGETS}
        ${AOM_ENCODER_TOOL_TARGETS})
+       
+# if(CONFIG_MSCNN)
+#   # 用户必须通过 -DCMAKE_PREFIX_PATH 指定 libtorch 路径，或设置 LIBTORCH_ROOT
+#   if(NOT DEFINED LIBTORCH_ROOT AND NOT CMAKE_PREFIX_PATH MATCHES "libtorch")
+#     message(FATAL_ERROR "CONFIG_LIBTORCH=ON but LibTorch not found. Please set -DLIBTORCH_ROOT=/path/to/libtorch or -DCMAKE_PREFIX_PATH=/path/to/libtorch")
+#   endif()
+
+#   if(DEFINED LIBTORCH_ROOT)
+#     list(APPEND CMAKE_PREFIX_PATH "${LIBTORCH_ROOT}")
+#   endif()
+
+#   find_package(Torch REQUIRED)
+
+#   # 确保 aom 库能链接 torch
+#   target_link_libraries(aom PRIVATE "${TORCH_LIBRARIES}")
+#   if(BUILD_SHARED_LIBS)
+#     target_link_libraries(aom_static PRIVATE "${TORCH_LIBRARIES}")
+#   endif()
+
+#   # 设置 C++ 标准（LibTorch 需要 C++14+）
+#   set_property(TARGET aom PROPERTY CXX_STANDARD 17)
+#   if(BUILD_SHARED_LIBS)
+#     set_property(TARGET aom_static PROPERTY CXX_STANDARD 17)
+#   endif()
+
+#   message(STATUS "LibTorch found: ${TORCH_LIBRARIES}")
+# endif()
 
   if(CONFIG_TENSORFLOW_LITE)
     # Building TFLite from third_party sources. Previously TFLite was fetched
@@ -1203,8 +1230,19 @@ endforeach()
 # Generate aom.pc and setup install rule.
 setup_aom_install_targets()
 
-# CONFIG_MSCNN
-# Copy the nn_loopfilter directory to the build directory
-if(CONFIG_MSCNN)
-  find_package(Torch REQUIRED)
-endif()
+# # CONFIG_MSCNN
+# # Copy the nn_loopfilter directory to the build directory
+# if(CONFIG_MSCNN)
+#   find_package(Torch REQUIRED)
+# endif()
+
+# if(CONFIG_MSCNN)
+#   set(CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/libtorch" CACHE STRING "Prefix paths for CMake" FORCE)
+#   find_package(Torch REQUIRED)
+#   include_directories(${TORCH_INCLUDE_DIRS})
+# endif()
+
+# if(CONFIG_MAKE_DATASETS)
+#   set(DATASETS_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/datasets" CACHE STRING "Path to save datasets")
+#   target_compile_definitions(aom_av1_common PRIVATE DATASETS_OUTPUT_PATH="${DATASETS_OUTPUT_PATH}")
+# endif()

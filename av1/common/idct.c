@@ -995,6 +995,10 @@ static void av1_highbd_inv_txfm_add_master(const tran_low_t *input,
   av1_highbd_inv_txfm_add(input, dest, stride, txfm_param);
 }
 
+// #if CONFIG_MSCNN // TODOINTER
+// extern struct buf_2d *dst_pred_ptr;
+// #endif
+
 #if CONFIG_MSCNN
 void av1_inverse_transform_block(const MACROBLOCKD *xd,
                                  const tran_low_t *dqcoeff, int plane,
@@ -1015,7 +1019,7 @@ void av1_inverse_transform_block(const MACROBLOCKD *xd,
     int w = tx_size_wide[tx_size];
     int h = tx_size_high[tx_size];
 
-    int32_t *residuePtr = (int32_t *)dstResidue;
+    uint16_t *residuePtr = dstResidue;
     for (int r = 0; r < h; ++r) {
       for (int c = 0; c < w; ++c) {
         // residue
@@ -1079,12 +1083,15 @@ void av1_inverse_transform_block(const MACROBLOCKD *xd,
   }
 
 #if CONFIG_MSCNN
-  int32_t *residuePtr = (int32_t *)dstResidue;
+  uint16_t *residuePtr = dstResidue;
   uint16_t *recon = dst;
+  // uint16_t *dst_pred = dst_pred_ptr->buf; // TODOINTER
   for (int r = 0; r < h; ++r) {
     for (int c = 0; c < w; ++c) {
       // residue
-      residuePtr[r * strideResidue + c] = (int32_t) (recon[r * stride + c]) - (int32_t) (pred[r * pred_stride + c]);
+      residuePtr[r * strideResidue + c] =
+          recon[r * stride + c] - pred[r * pred_stride + c];
+      // dst_pred[r * stride + c] = pred[r * pred_stride + c]; // TODOINTER
     }
   }
 #endif

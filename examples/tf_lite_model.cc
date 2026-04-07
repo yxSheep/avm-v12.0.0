@@ -229,6 +229,7 @@ int main() {
   // Using single-thread as an example. Can be changed as required.
   TfLiteDelegate *xnnpack_delegate = GetTfliteXnnpackDelegate(1);
   if (interpreter->ModifyGraphWithDelegate(xnnpack_delegate) != kTfLiteOk) {
+    std::cout << "2" << std::endl; // PCNN
     reporter->Report("Failed at modifying graph with XNNPack delegate");
     return EXIT_FAILURE;
   }

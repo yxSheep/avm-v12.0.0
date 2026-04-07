@@ -75,6 +75,12 @@ static size_t wrap_fwrite(const void *ptr, size_t size, size_t nmemb,
 
 static const char *exec_name;
 
+#if CONFIG_MAKE_DATASETS
+void nn_create_dir(const char *path);
+const char *dataset_file_path;
+int dataset_qp;
+#endif
+
 static void warn_or_exit_on_errorv(aom_codec_ctx_t *ctx, int fatal,
                                    const char *s, va_list ap) {
   if (ctx->err) {
@@ -1511,6 +1517,9 @@ static void show_stream_config(struct stream_state *stream,
 
     if (ctrl == AOME_SET_QP) {
       qp = stream->config.arg_ctrls[i][1];
+#if CONFIG_MAKE_DATASETS
+      dataset_qp = qp;
+#endif      
     }
     if (ctrl == AOME_SET_CPUUSED) {
       cpu_used = stream->config.arg_ctrls[i][1];
@@ -2176,6 +2185,12 @@ int main(int argc, const char **argv_) {
 
   /* Handle non-option arguments */
   input.filename = argv[0];
+
+#if CONFIG_MAKE_DATASETS
+  // nn_create_dir("../datasets/test/");
+  dataset_file_path = argv[0];
+  fprintf(stdout, "dataset_file_name: %s\n", dataset_file_path == NULL ? "No input file !!!" : dataset_file_path);
+#endif
 
   FOREACH_STREAM(stream, streams) {
     if (stream->config.recon_fn != NULL) {

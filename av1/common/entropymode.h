@@ -20,6 +20,10 @@
 #include "av1/common/seg_common.h"
 #include "aom_dsp/aom_filter.h"
 
+#if CONFIG_MSCNN
+#include "av1/common/enums.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -283,9 +287,27 @@ typedef struct frame_contexts {
   aom_cdf_prob switchable_flex_restore_cdf[MAX_LR_FLEX_SWITCHABLE_BITS]
                                           [MAX_LR_FLEX_MB_PLANE][CDF_SIZE(2)];
   aom_cdf_prob ccso_cdf[3][CCSO_CONTEXT][CDF_SIZE(2)];
+
 #if CONFIG_MSCNN
   aom_cdf_prob nn_cdf[2][2][CDF_SIZE(2)];
-#endif  
+#endif
+
+#if CONFIG_MY_GUIDED_CNN
+  aom_cdf_prob cnn_guided_mode_cdf[CDF_SIZE(3)];
+  aom_cdf_prob cnn_guided_norestore_cdf[2][CDF_SIZE(2)];
+#endif
+
+#if CONFIG_MY_GUIDED_USING_CODEBOOK 
+  aom_cdf_prob intra_cnn_guided_codebook_cdf[QP_NUM][CODEBOOK_CHANNEL]
+                                            [CDF_SIZE(255)];
+  aom_cdf_prob intra_res_cnn_guided_codebook_cdf[QP_NUM][CODEBOOK_CHANNEL]
+                                                [CDF_SIZE(255)];
+  aom_cdf_prob inter_cnn_guided_codebook_cdf[QP_NUM][CODEBOOK_CHANNEL]
+                                            [CDF_SIZE(255)];
+  aom_cdf_prob inter_res_cnn_guided_codebook_cdf[QP_NUM][CODEBOOK_CHANNEL]
+                                                [CDF_SIZE(255)];
+#endif
+
   // CDF for CDEF strength index 0
   aom_cdf_prob cdef_strength_index0_cdf[CDEF_STRENGTH_INDEX0_CTX][CDF_SIZE(2)];
   // CDF for CDEF all other strength index

@@ -328,7 +328,8 @@ static AV1LfMTInfo *get_lf_job_info(AV1LfSync *lf_sync) {
 #if CONFIG_MSCNN
 static INLINE void thread_loop_filter_rows(
     const YV12_BUFFER_CONFIG *const frame_buffer,
-    const YV12_BUFFER_CONFIG *const residue_buffer, AV1_COMMON *const cm,
+    const YV12_BUFFER_CONFIG *const residue_buffer, 
+    YV12_BUFFER_CONFIG *bs_buffer, AV1_COMMON *const cm,
     struct macroblockd_plane *planes, MACROBLOCKD *xd,
     AV1LfSync *const lf_sync) {
 #else
@@ -343,7 +344,9 @@ static INLINE void thread_loop_filter_rows(
       ALIGN_POWER_OF_TWO(cm->mi_params.mi_cols, mib_size_log2) >> mib_size_log2;
   int mi_row, mi_col, plane, dir;
   int r, c;
-
+#if CONFIG_MSCNN
+  struct buf_2d bs_block_dst[MAX_MB_PLANE];
+#endif
   while (1) {
     AV1LfMTInfo *cur_job_info = get_lf_job_info(lf_sync);
 
@@ -359,12 +362,17 @@ static INLINE void thread_loop_filter_rows(
 #if CONFIG_MSCNN
           av1_setup_dst_planes(planes, frame_buffer, residue_buffer, mi_row,
                                mi_col, plane, plane + 1, NULL);
+
+          av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col, plane, plane + 1, NULL); 
+
+          av1_filter_block_plane_vert(cm, xd, &bs_block_dst[plane], plane, &planes[plane], mi_row,
+                                      mi_col);                               
 #else
           av1_setup_dst_planes(planes, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-#endif
           av1_filter_block_plane_vert(cm, xd, plane, &planes[plane], mi_row,
-                                      mi_col);
+                                      mi_col);                               
+#endif
           sync_write(lf_sync, r, c, sb_cols, plane);
         }
       } else if (dir == 1) {
@@ -381,12 +389,17 @@ static INLINE void thread_loop_filter_rows(
 #if CONFIG_MSCNN
           av1_setup_dst_planes(planes, frame_buffer, residue_buffer, mi_row,
                                mi_col, plane, plane + 1, NULL);
+
+          av1_setup_bs_planes(bs_block_dst, bs_buffer, mi_row, mi_col, plane, plane + 1, NULL);
+
+          av1_filter_block_plane_horz(cm, xd, &bs_block_dst[plane], plane, &planes[plane], mi_row,
+                                      mi_col);                               
 #else
           av1_setup_dst_planes(planes, frame_buffer, mi_row, mi_col, plane,
                                plane + 1, NULL);
-#endif
           av1_filter_block_plane_horz(cm, xd, plane, &planes[plane], mi_row,
-                                      mi_col);
+                                      mi_col);                               
+#endif
         }
       }
     } else {
@@ -399,8 +412,8 @@ static INLINE void thread_loop_filter_rows(
 static int loop_filter_row_worker(void *arg1, void *arg2) {
   AV1LfSync *const lf_sync = (AV1LfSync *)arg1;
   LFWorkerData *const lf_data = (LFWorkerData *)arg2;
-#if CONFIG_MSCNN
-  thread_loop_filter_rows(lf_data->frame_buffer, lf_data->residue_buffer,
+#if CONFIG_MSCNN // TODOCNN 多线程 bs 还没有分配内存
+  thread_loop_filter_rows(lf_data->frame_buffer, lf_data->residue_buffer, lf_data->bs_buffer,
                           lf_data->cm, lf_data->planes, lf_data->xd, lf_sync);
 #else
   thread_loop_filter_rows(lf_data->frame_buffer, lf_data->cm, lf_data->planes,

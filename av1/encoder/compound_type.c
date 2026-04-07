@@ -790,8 +790,8 @@ int av1_handle_inter_intra_mode(const AV1_COMP *const cpi, MACROBLOCK *const x,
   xd->plane[0].dst.buf = tmp_buf;
   xd->plane[0].dst.stride = bw;
 
-#if CONFIG_MSCNN
-  DECLARE_ALIGNED(32, int32_t, tmp_buf_residue_[2 * MAX_INTERINTRA_SB_SQUARE]);
+#if CONFIG_MSCNN // TODOCNN int32
+  DECLARE_ALIGNED(16, uint16_t, tmp_buf_residue_[MAX_INTERINTRA_SB_SQUARE]);
   uint16_t *tmp_buf_residue = (uint16_t *)
       tmp_buf_residue_;  
   xd->plane[0].dstResidue.buf = tmp_buf_residue;

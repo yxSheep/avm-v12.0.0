@@ -1239,10 +1239,16 @@ typedef enum {
 enum { SCALING_COUNT = 3 };
 enum { BLK_SIZE_COUNT = 4 };
 extern const int blk_sizes[BLK_SIZE_COUNT];
-enum { CNN_MODEL_COUNT = 4 }; // TODOCNN MODEL_COUNT 命名冲突
-enum {MODEL_BITS = 2};
+enum { CNN_MODEL_COUNT = 4 };  // TODOCNN MODEL_COUNT 命名冲突
+enum { MODEL_BITS = 2 };
 #endif
 
+#if CONFIG_MY_GUIDED_USING_CODEBOOK
+enum { CODEBOOK_LEVEL = 2 };
+enum { QP_NUM = 6 };
+enum { BLOCK_SIZE_NUM = 4 };
+enum { CODEBOOK_CHANNEL = 3 };
+#endif
 /*!\endcond */
 
 #ifdef __cplusplus

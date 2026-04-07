@@ -203,7 +203,12 @@ void av1_setup_src_planes(MACROBLOCK *x, const YV12_BUFFER_CONFIG *src,
                      src->crop_heights[is_uv], src->crop_widths[is_uv],
                      src->crop_heights[is_uv], src->strides[is_uv], mi_row,
                      mi_col, NULL, x->e_mbd.plane[i].subsampling_x,
-                     x->e_mbd.plane[i].subsampling_y, chroma_ref_info);
+                     x->e_mbd.plane[i].subsampling_y, chroma_ref_info
+// #if CONFIG_MSCNN // TODOINTER
+//                      ,
+//                      i,src->border
+// #endif
+    );
   }
 }
 
@@ -916,7 +921,8 @@ static AOM_INLINE void bridge_frame_set_offsets(
       chroma_ref_info);
 
 #if CONFIG_MSCNN
-  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
+  av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf,
+                       &cm->cur_frame_residue->buf, mi_row, mi_col, 0,
                        num_planes, chroma_ref_info);
 #else
   av1_setup_dst_planes(xd->plane, &cm->cur_frame->buf, mi_row, mi_col, 0,

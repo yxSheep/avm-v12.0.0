@@ -115,7 +115,7 @@ void setup_tpl_buffers(AV1_COMMON *const cm, TplParams *const tpl_data,
       aom_internal_error(&cm->error, AOM_CODEC_MEM_ERROR,
                          "Failed to allocate frame buffer");
 #if CONFIG_MSCNN
-    if (aom_alloc_residue_frame_buffer(
+    if (aom_alloc_frame_buffer(
             &tpl_data->tpl_residue_pool[frame], cm->width, cm->height,
             cm->seq_params.subsampling_x, cm->seq_params.subsampling_y,
             tpl_data->border_in_pixels,

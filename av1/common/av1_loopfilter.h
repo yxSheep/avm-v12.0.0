@@ -106,6 +106,7 @@ typedef struct LoopFilterWorkerData {
   YV12_BUFFER_CONFIG *frame_buffer;
 #if CONFIG_MSCNN
   YV12_BUFFER_CONFIG *residue_buffer;
+  YV12_BUFFER_CONFIG *bs_buffer;
 #endif
   struct AV1Common *cm;
   struct macroblockd_plane planes[MAX_MB_PLANE];
@@ -132,7 +133,8 @@ void av1_loop_filter_frame_init(struct AV1Common *cm, int plane_start,
  */
 #if CONFIG_MSCNN
 void av1_loop_filter_frame(YV12_BUFFER_CONFIG *frame, 
-                           YV12_BUFFER_CONFIG *residue, struct AV1Common *cm,
+                           YV12_BUFFER_CONFIG *residue, 
+                           YV12_BUFFER_CONFIG *bs, struct AV1Common *cm,
                            struct macroblockd *xd, int plane_start,
                            int plane_end, int partial_frame);
 #else
@@ -149,6 +151,20 @@ void loop_filter_tip_frame(struct AV1Common *cm, int plane_start,
                            int plane_end);
 void init_tip_lf_parameter(struct AV1Common *cm, int plane_start,
                            int plane_end);
+
+#if CONFIG_MSCNN
+void av1_filter_block_plane_vert(struct AV1Common *const cm,
+                                 const MACROBLOCKD *const xd, 
+                                 struct buf_2d  *bs, const int plane,
+                                 const MACROBLOCKD_PLANE *const plane_ptr,
+                                 const uint32_t mi_row, const uint32_t mi_col);
+
+void av1_filter_block_plane_horz(struct AV1Common *const cm,
+                                 const MACROBLOCKD *const xd, 
+                                 struct buf_2d  *bs, const int plane,
+                                 const MACROBLOCKD_PLANE *const plane_ptr,
+                                 const uint32_t mi_row, const uint32_t mi_col);
+#else
 void av1_filter_block_plane_vert(struct AV1Common *const cm,
                                  const MACROBLOCKD *const xd, const int plane,
                                  const MACROBLOCKD_PLANE *const plane_ptr,
@@ -158,6 +174,8 @@ void av1_filter_block_plane_horz(struct AV1Common *const cm,
                                  const MACROBLOCKD *const xd, const int plane,
                                  const MACROBLOCKD_PLANE *const plane_ptr,
                                  const uint32_t mi_row, const uint32_t mi_col);
+#endif
+
 int df_quant_from_qindex(int q_index, int bit_depth);
 
 int df_side_from_qindex(int q_index, int bit_depth);

@@ -242,9 +242,9 @@ typedef struct {
   uint8_t nn_loopfilter_blk_control_enable;
   int blk_size_idx;
   int flag_count;
-  int stride;  
+  int stride;
   uint8_t nn_loopfilter_flags[125000];
-  int rs_idx; // residual scaling index
+  int rs_idx;  // residual scaling index
   int model_idx;
 } NnlfInfo;
 #endif
@@ -2654,6 +2654,19 @@ typedef struct AV1Common {
    */
   struct OperatingPointSet *ops;
 #endif  // CONFIG_MULTILAYER_HLS
+
+#if CONFIG_MY_CNN
+  int use_cnn[MAX_MB_PLANE];
+#endif
+
+#if CONFIG_MY_GUIDED_CNN
+  AdpGuidedInfo cnn_quad_info;
+  double lr_y_rdcost;
+  double gdf_y_rdcost;
+  bool is_use_lr;
+  bool is_use_gdf;
+  bool is_use_cnn;
+#endif  
 } AV1_COMMON;
 
 /*!\cond */
@@ -2734,14 +2747,14 @@ static INLINE int get_fb_residue(AV1_COMMON *cm) {
   RefCntBuffer *const frame_bufs = cm->buffer_pool_residue->frame_bufs;
   lock_buffer_pool(cm->buffer_pool_residue);
   if (frame_bufs[0].buf.use_external_reference_buffers) {
-      // If this frame buffer's y_buffer, u_buffer, and v_buffer point to the
-      // external reference buffers. Restore the buffer pointers to point to the
-      // internally allocated memory.
-      YV12_BUFFER_CONFIG *ybf = &frame_bufs[0].buf;
-      ybf->y_buffer = ybf->store_buf_adr[0];
-      ybf->u_buffer = ybf->store_buf_adr[1];
-      ybf->v_buffer = ybf->store_buf_adr[2];
-      ybf->use_external_reference_buffers = 0;
+    // If this frame buffer's y_buffer, u_buffer, and v_buffer point to the
+    // external reference buffers. Restore the buffer pointers to point to the
+    // internally allocated memory.
+    YV12_BUFFER_CONFIG *ybf = &frame_bufs[0].buf;
+    ybf->y_buffer = ybf->store_buf_adr[0];
+    ybf->u_buffer = ybf->store_buf_adr[1];
+    ybf->v_buffer = ybf->store_buf_adr[2];
+    ybf->use_external_reference_buffers = 0;
   }
   unlock_buffer_pool(cm->buffer_pool_residue);
   return 0;
@@ -2796,7 +2809,9 @@ static INLINE RefCntBuffer *assign_cur_frame_new_fb(AV1_COMMON *const cm) {
 
 #if CONFIG_MSCNN
   const int residue_fb_idx = get_fb_residue(cm);
-  cm->cur_frame_residue = &cm->buffer_pool_residue->frame_bufs[residue_fb_idx]; // only 1 frame in residue pool
+  cm->cur_frame_residue =
+      &cm->buffer_pool_residue
+           ->frame_bufs[residue_fb_idx];  // only 1 frame in residue pool
   // cm->cur_frame_residue->buf.buf_8bit_valid = 0; TODOCNN v12中没有该变量
 #endif
 
